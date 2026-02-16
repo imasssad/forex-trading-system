@@ -64,48 +64,69 @@ config: TradingConfig = DEFAULT_CONFIG  # Will be loaded from DB on startup
 
 # ===================== TRADE SYNC =====================
 
-async def sync_trades_with_oanda(client: OandaClient) -> int:
+async def sync_trades_with_oanda(client: OandaClient) -> Dict:
     """
-    Compare local open trades with actual OANDA trades.
-    Close any trades that exist locally but not on OANDA (failed executions).
-    Returns count of orphaned trades closed.
+    Bidirectional sync between local database and OANDA.
+    1. Close orphaned local trades (exist in DB but not on OANDA)
+    2. Import missing OANDA trades (exist on OANDA but not in DB)
+    Returns dict with counts of actions taken.
     """
+    result = {"orphaned_closed": 0, "imported": 0, "errors": []}
+    
     try:
         # Get actual OANDA trades
         oanda_trades = client.get_open_trades()
-        oanda_trade_ids = {trade.id for trade in oanda_trades}
+        oanda_trade_map = {trade.id: trade for trade in oanda_trades}
+        oanda_trade_ids = set(oanda_trade_map.keys())
         
         # Get local open trades
         local_trades = database.get_open_trades()
+        local_oanda_ids = {t.get('oanda_trade_id') for t in local_trades if t.get('oanda_trade_id')}
         
-        orphaned_count = 0
-        
+        # 1. Close orphaned local trades (in DB but not on OANDA)
         for local_trade in local_trades:
             trade_id = local_trade['id']
             oanda_id = local_trade.get('oanda_trade_id')
             
-            # Check if this local trade exists on OANDA
             if oanda_id and oanda_id in oanda_trade_ids:
-                # Trade is synced
-                continue
+                continue  # Trade is synced
             else:
-                # Orphaned trade - exists locally but not on OANDA
-                orphaned_count += 1
-                logger.warning(f"Orphaned trade #{trade_id} ({local_trade['instrument']} {local_trade['direction'].upper()}) - closing as FAILED")
-                
-                # Close this orphaned trade
+                result["orphaned_closed"] += 1
+                logger.warning(f"Orphaned trade #{trade_id} ({local_trade['instrument']}) - closing as FAILED")
                 database.close_trade(
                     trade_id=trade_id,
                     exit_price=local_trade['entry_price'],
                     profit_loss=0.0,
                     profit_pips=0.0,
-                    close_reason="EXECUTION_FAILED - Trade never opened on OANDA"
+                    close_reason="EXECUTION_FAILED - Trade not found on OANDA"
                 )
         
-        return orphaned_count
+        # 2. Import missing OANDA trades (on OANDA but not in DB)
+        for oanda_id, trade in oanda_trade_map.items():
+            if oanda_id not in local_oanda_ids:
+                result["imported"] += 1
+                direction = "long" if trade.units > 0 else "short"
+                logger.info(f"Importing OANDA trade #{oanda_id}: {trade.instrument} {direction}")
+                
+                database.insert_trade(
+                    instrument=trade.instrument,
+                    direction=direction,
+                    units=abs(trade.units),
+                    entry_price=trade.price,
+                    stop_loss=trade.stop_loss,
+                    take_profit=trade.take_profit,
+                    oanda_trade_id=oanda_id,
+                    signal_id=None
+                )
+        
+        if result["orphaned_closed"] > 0 or result["imported"] > 0:
+            logger.info(f"Sync complete: {result['orphaned_closed']} orphaned closed, {result['imported']} imported")
+        
+        return result
     except Exception as e:
         logger.error(f"Trade sync error: {e}")
-        return 0
+        result["errors"].append(str(e))
+        return result
 
 
 # ===================== LIFESPAN =====================
@@ -767,27 +788,86 @@ async def api_modify_trade(req: ModifyTradeRequest):
 @app.post("/api/trades/sync")
 async def api_sync_trades():
     """
-    Sync local trades with OANDA.
-    Closes any orphaned trades that exist locally but not on OANDA.
+    Bidirectional sync with OANDA:
+    - Closes orphaned trades (in DB but not on OANDA)
+    - Imports missing trades (on OANDA but not in DB)
     """
     if not oanda_client:
         raise HTTPException(status_code=503, detail="OANDA client not available")
     
     try:
-        orphaned_count = await sync_trades_with_oanda(oanda_client)
-        message = f"Synced trades with OANDA"
-        if orphaned_count > 0:
-            message += f" - closed {orphaned_count} orphaned trade(s)"
-            database.log_activity("info", f"Manual trade sync: closed {orphaned_count} orphaned trades")
+        result = await sync_trades_with_oanda(oanda_client)
+        messages = []
+        if result["orphaned_closed"] > 0:
+            messages.append(f"closed {result['orphaned_closed']} orphaned")
+        if result["imported"] > 0:
+            messages.append(f"imported {result['imported']} from OANDA")
+        
+        message = "Sync complete"
+        if messages:
+            message += ": " + ", ".join(messages)
+            database.log_activity("info", f"Trade sync: {', '.join(messages)}")
+        else:
+            message += " - already in sync"
         
         return {
             "success": True,
-            "orphaned_closed": orphaned_count,
+            "orphaned_closed": result["orphaned_closed"],
+            "imported": result["imported"],
             "message": message
         }
     except Exception as e:
         logger.error(f"Trade sync failed: {e}")
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/reset")
+async def api_reset_all():
+    """
+    Full reset: close all OANDA positions and clear database.
+    Use with caution - this deletes all trade history.
+    """
+    results = {
+        "oanda_closed": 0,
+        "database_cleared": False,
+        "errors": []
+    }
+    
+    # 1. Close all OANDA trades
+    if oanda_client and not config.paper_trading:
+        try:
+            oanda_trades = oanda_client.get_open_trades()
+            for trade in oanda_trades:
+                try:
+                    oanda_client.close_trade(trade.id)
+                    results["oanda_closed"] += 1
+                except Exception as e:
+                    results["errors"].append(f"Close OANDA {trade.id}: {str(e)}")
+        except Exception as e:
+            results["errors"].append(f"OANDA fetch: {str(e)}")
+    
+    # 2. Clear database tables
+    try:
+        with database.get_db() as conn:
+            conn.execute("DELETE FROM trades")
+            conn.execute("DELETE FROM signals")
+            conn.execute("DELETE FROM activity_log")
+            conn.execute("DELETE FROM daily_snapshots")
+            # Reset auto-increment counters
+            conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('trades', 'signals', 'activity_log', 'daily_snapshots')")
+        results["database_cleared"] = True
+        logger.info("Database reset: cleared trades, signals, activity_log, daily_snapshots")
+    except Exception as e:
+        results["errors"].append(f"Database clear: {str(e)}")
+    
+    # Log the reset
+    database.log_activity("warning", "FULL RESET - All data cleared", json.dumps(results))
+    
+    return {
+        "success": len(results["errors"]) == 0,
+        **results,
+        "message": f"Reset complete: {results['oanda_closed']} OANDA trades closed, database cleared"
+    }
 
 
 @app.post("/api/trades/import-history")
