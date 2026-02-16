@@ -274,7 +274,37 @@ class SignalGenerator:
                         stop_loss_price=stop_loss,
                         take_profit_price=take_profit,
                     )
+                    
+                    # Check if order was rejected by OANDA (HTTP 200 but with rejection)
+                    if "orderRejectTransaction" in oanda_result:
+                        execution_success = False
+                        reject_reason = oanda_result["orderRejectTransaction"].get("rejectReason", "Unknown")
+                        error_msg = f"OANDA rejected order: {reject_reason}"
+                        logger.error(error_msg)
+                        database.log_activity(
+                            "error", 
+                            f"OANDA rejected {signal.instrument} {'BUY' if direction == 'long' else 'SELL'}",
+                            f"{error_msg} | Units: {units if direction == 'long' else -units} | SL: {stop_loss:.5f} | TP: {take_profit:.5f}"
+                        )
+                        # Don't create trade record if rejected
+                        return
+                    
+                    # Extract trade ID from successful fill
                     oanda_trade_id = oanda_result.get("orderFillTransaction", {}).get("tradeOpened", {}).get("tradeID")
+                    
+                    # Validate that we actually got a trade ID
+                    if not oanda_trade_id:
+                        execution_success = False
+                        error_msg = "OANDA response missing trade ID"
+                        logger.error(f"{error_msg}: {oanda_result}")
+                        database.log_activity(
+                            "error", 
+                            f"Invalid OANDA response for {signal.instrument} {'BUY' if direction == 'long' else 'SELL'}",
+                            f"{error_msg} | Response: {oanda_result}"
+                        )
+                        # Don't create trade record without valid trade ID
+                        return
+                    
                     database.log_activity(
                         "trade",
                         f"LIVE {'BUY' if direction == 'long' else 'SELL'} "
