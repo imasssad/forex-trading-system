@@ -248,6 +248,16 @@ def get_all_closed_trades() -> List[Dict]:
         return [dict(r) for r in rows]
 
 
+def get_trade_history(limit: int = 100, offset: int = 0) -> List[Dict]:
+    """Get closed trade history with pagination."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM trades WHERE status = 'closed' ORDER BY close_time DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 # ===================== ACTIVITY LOG =====================
 
 def log_activity(level: str, message: str, details: str = None):
