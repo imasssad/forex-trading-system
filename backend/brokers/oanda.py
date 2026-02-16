@@ -240,6 +240,60 @@ class OandaClient:
         
         return trades
     
+    def get_closed_trades(self, count: int = 500) -> List[Dict]:
+        """
+        Get recent closed trades from transaction history.
+        
+        Args:
+            count: Number of recent transactions to fetch (max 1000)
+            
+        Returns:
+            List of closed trade dictionaries with entry/exit info
+        """
+        response = self._request(
+            "GET",
+            f"/v3/accounts/{self.account_id}/transactions",
+            {"count": min(count, 1000)}
+        )
+        
+        closed_trades = []
+        trade_opens = {}  # Map trade IDs to their open info
+        
+        # Parse transactions to match opens and closes
+        for txn in reversed(response.get("transactions", [])):  # Process oldest first
+            txn_type = txn.get("type", "")
+            
+            # Track trade openings
+            if txn_type == "ORDER_FILL" and "tradeOpened" in txn:
+                trade_id = txn["tradeOpened"]["tradeID"]
+                units = float(txn["units"])
+                trade_opens[trade_id] = {
+                    "id": trade_id,
+                    "instrument": txn["instrument"],
+                    "units": abs(units),
+                    "entry_price": float(txn["price"]),
+                    "open_time": txn["time"],
+                    "direction": "long" if units > 0 else "short"
+                }
+            
+            # Track trade closings
+            elif txn_type == "ORDER_FILL" and "tradesClosed" in txn and txn["tradesClosed"]:
+                for closed in txn["tradesClosed"]:
+                    trade_id = closed["tradeID"]
+                    if trade_id in trade_opens:
+                        trade_info = trade_opens[trade_id].copy()
+                        trade_info.update({
+                            "exit_price": float(txn["price"]),
+                            "close_time": txn["time"],
+                            "profit_loss": float(closed.get("realizedPL", 0)),
+                            "close_reason": txn.get("reason", "MANUAL")
+                        })
+                        closed_trades.append(trade_info)
+                        # Remove from opens so we don't process again
+                        del trade_opens[trade_id]
+        
+        return closed_trades
+    
     # ==================== Pricing Methods ====================
     
     def get_price(self, instrument: str) -> Tuple[float, float]:

@@ -790,6 +790,87 @@ async def api_sync_trades():
         raise HTTPException(status_code=502, detail=str(e))
 
 
+@app.post("/api/trades/import-history")
+async def api_import_closed_trades(count: int = 500):
+    """
+    Import closed trades from OANDA transaction history into database.
+    Useful for populating trade history from past trades.
+    """
+    if not oanda_client:
+        raise HTTPException(status_code=503, detail="OANDA client not available")
+    
+    try:
+        # Get closed trades from OANDA
+        closed_trades = oanda_client.get_closed_trades(count=count)
+        
+        if not closed_trades:
+            return {
+                "success": True,
+                "imported": 0,
+                "message": "No closed trades found in OANDA history"
+            }
+        
+        # Get existing trade IDs from database to avoid duplicates
+        existing_oanda_ids = set()
+        with database.get_db() as conn:
+            rows = conn.execute("SELECT oanda_trade_id FROM trades WHERE oanda_trade_id IS NOT NULL").fetchall()
+            existing_oanda_ids = {row[0] for row in rows}
+        
+        imported = 0
+        for trade in closed_trades:
+            oanda_id = trade["id"]
+            
+            # Skip if already in database
+            if oanda_id in existing_oanda_ids:
+                continue
+            
+            # Calculate profit in pips
+            instrument = trade["instrument"]
+            pip_size = oanda_client.PIP_SIZES.get(instrument, 0.0001)
+            price_diff = trade["exit_price"] - trade["entry_price"]
+            if trade["direction"] == "short":
+                price_diff = -price_diff
+            profit_pips = price_diff / pip_size
+            
+            # Insert into database
+            with database.get_db() as conn:
+                conn.execute("""
+                    INSERT INTO trades 
+                        (oanda_trade_id, instrument, direction, units, entry_price, exit_price,
+                         profit_loss, profit_pips, close_reason, status, open_time, close_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'closed', ?, ?)
+                """, (
+                    oanda_id,
+                    instrument,
+                    trade["direction"],
+                    trade["units"],
+                    trade["entry_price"],
+                    trade["exit_price"],
+                    trade["profit_loss"],
+                    profit_pips,
+                    trade.get("close_reason", "UNKNOWN"),
+                    trade["open_time"],
+                    trade["close_time"]
+                ))
+            
+            imported += 1
+        
+        message = f"Imported {imported} closed trade(s) from OANDA"
+        database.log_activity("info", message)
+        logger.info(message)
+        
+        return {
+            "success": True,
+            "imported": imported,
+            "total_found": len(closed_trades),
+            "message": message
+        }
+        
+    except Exception as e:
+        logger.error(f"Import closed trades failed: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @app.get("/api/performance")
 async def api_performance(days: int = None):
     """Performance stats + equity curve."""
