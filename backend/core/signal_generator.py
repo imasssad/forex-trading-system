@@ -279,12 +279,19 @@ class SignalGenerator:
                     if "orderRejectTransaction" in oanda_result:
                         execution_success = False
                         reject_reason = oanda_result["orderRejectTransaction"].get("rejectReason", "Unknown")
-                        error_msg = f"OANDA rejected order: {reject_reason}"
-                        logger.error(error_msg)
+                        
+                        # Provide user-friendly explanation
+                        if reject_reason == "INSUFFICIENT_MARGIN":
+                            friendly_msg = "Trade not placed: Insufficient margin available (existing positions using account margin)"
+                            logger.info(f"⚠️  {signal.instrument} {'BUY' if direction == 'long' else 'SELL'} - {friendly_msg}")
+                        else:
+                            friendly_msg = f"Trade not placed: {reject_reason}"
+                            logger.warning(f"⚠️  {signal.instrument} {'BUY' if direction == 'long' else 'SELL'} - {friendly_msg}")
+                        
                         database.log_activity(
-                            "error", 
-                            f"OANDA rejected {signal.instrument} {'BUY' if direction == 'long' else 'SELL'}",
-                            f"{error_msg} | Units: {units if direction == 'long' else -units} | SL: {stop_loss:.5f} | TP: {take_profit:.5f}"
+                            "info", 
+                            f"{signal.instrument} {'BUY' if direction == 'long' else 'SELL'} - Trade not placed",
+                            f"{friendly_msg} | Requested units: {units if direction == 'long' else -units} | SL: {stop_loss:.5f} | TP: {take_profit:.5f}"
                         )
                         # Don't create trade record if rejected
                         return
@@ -295,12 +302,19 @@ class SignalGenerator:
                     # Validate that we actually got a trade ID
                     if not oanda_trade_id:
                         execution_success = False
-                        error_msg = "OANDA response missing trade ID"
-                        logger.error(f"{error_msg}: {oanda_result}")
+                        # Check if it was cancelled due to insufficient margin
+                        cancel_reason = oanda_result.get("orderCancelTransaction", {}).get("reason", "Unknown")
+                        if cancel_reason == "INSUFFICIENT_MARGIN":
+                            friendly_msg = "Trade not placed: Insufficient margin (existing positions using account margin)"
+                            logger.info(f"⚠️  {signal.instrument} {'BUY' if direction == 'long' else 'SELL'} - {friendly_msg}")
+                        else:
+                            friendly_msg = f"Trade not placed: {cancel_reason}"
+                            logger.warning(f"⚠️  {signal.instrument} {'BUY' if direction == 'long' else 'SELL'} - {friendly_msg}")
+                        
                         database.log_activity(
-                            "error", 
-                            f"Invalid OANDA response for {signal.instrument} {'BUY' if direction == 'long' else 'SELL'}",
-                            f"{error_msg} | Response: {oanda_result}"
+                            "info", 
+                            f"{signal.instrument} {'BUY' if direction == 'long' else 'SELL'} - Trade not placed",
+                            f"{friendly_msg} | Response: {oanda_result}"
                         )
                         # Don't create trade record without valid trade ID
                         return
