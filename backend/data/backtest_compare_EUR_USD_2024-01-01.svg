@@ -1,0 +1,23 @@
+<svg width="900" height="360" viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg">
+<rect x="0" y="0" width="900" height="360" fill="#071427" />
+<line x1="60" y1="60.0" x2="840" y2="60.0" stroke="#0f2a33" stroke-width="1" />
+<text x="50" y="64.0" font-size="12" fill="#9aa6b2" text-anchor="end">$475,655</text>
+<line x1="60" y1="120.0" x2="840" y2="120.0" stroke="#0f2a33" stroke-width="1" />
+<text x="50" y="124.0" font-size="12" fill="#9aa6b2" text-anchor="end">$359,171</text>
+<line x1="60" y1="180.0" x2="840" y2="180.0" stroke="#0f2a33" stroke-width="1" />
+<text x="50" y="184.0" font-size="12" fill="#9aa6b2" text-anchor="end">$242,687</text>
+<line x1="60" y1="240.0" x2="840" y2="240.0" stroke="#0f2a33" stroke-width="1" />
+<text x="50" y="244.0" font-size="12" fill="#9aa6b2" text-anchor="end">$126,203</text>
+<line x1="60" y1="300.0" x2="840" y2="300.0" stroke="#0f2a33" stroke-width="1" />
+<text x="50" y="304.0" font-size="12" fill="#9aa6b2" text-anchor="end">$9,719</text>
+<polyline fill="none" stroke="#22c55e" stroke-width="2.5" points="60.0,298.8 101.1,297.6 142.1,300.0 183.2,293.0 224.2,292.3 265.3,294.9 306.3,290.7 347.4,293.4 388.4,285.4 429.5,271.3 470.5,265.1 511.6,252.5 552.6,230.3 593.7,202.7 634.7,180.0 675.8,153.3 716.8,122.3 757.9,86.5 798.9,64.2 840.0,60.0" opacity="0.95" />
+<polyline fill="none" stroke="#ff6b6b" stroke-width="2.5" points="60.0,300.0 103.3,299.7 146.7,299.6 190.0,298.6 233.3,298.4 276.7,299.1 320.0,297.0 363.3,297.8 406.7,295.3 450.0,290.1 493.3,287.4 536.7,278.0 580.0,263.4 623.3,249.1 666.7,229.8 710.0,204.0 753.3,149.9 796.7,96.6 840.0,60.0" opacity="0.95" />
+<circle cx="640" cy="40" r="6" fill="#22c55e" />
+<text x="654" y="45" font-size="12" fill="#9aa6b2">Server config</text>
+<circle cx="754" cy="40" r="6" fill="#ff6b6b" />
+<text x="768" y="45" font-size="12" fill="#9aa6b2">Overrides (ATR×3, Risk 2%)</text>
+<text x="60" y="30" font-size="16" fill="#e6eef3">Equity Curve — EUR/USD — 2024-01-01</text>
+<text x="60.0" y="348.0" font-size="12" fill="#9aa6b2" text-anchor="middle">2024-01-08</text>
+<text x="470.5" y="348.0" font-size="12" fill="#9aa6b2" text-anchor="middle">2024-07-11</text>
+<text x="840.0" y="348.0" font-size="12" fill="#9aa6b2" text-anchor="middle">2024-12-30</text>
+</svg>

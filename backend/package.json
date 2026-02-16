@@ -1,0 +1,18 @@
+{
+  "name": "forex_trading_system",
+  "version": "1.0.0",
+  "description": "RSI + AutoTrend strategy with full risk management, deployed via TradingView webhooks to OANDA. Includes Next.js dashboard, SQLite persistence, backtesting engine, and ForexFactory news integration.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bytez.js": "^3.0.0"
+  }
+}

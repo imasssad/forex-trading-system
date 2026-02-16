@@ -1,0 +1,42 @@
+//@version=5
+indicator("ATS Forex Signals", overlay=true)
+
+// ===== INPUTS =====
+rsiPeriod = input.int(14, "RSI Period", minval=1)
+rsiOversold = input.int(30, "RSI Oversold", minval=1, maxval=100)
+rsiOverbought = input.int(70, "RSI Overbought", minval=1, maxval=100)
+atrPeriod = input.int(14, "ATR Period", minval=1)
+atrMultiplier = input.float(1.5, "ATR Multiplier", minval=0.1, step=0.1)
+
+// ===== INDICATORS =====
+// RSI
+rsi = ta.rsi(close, rsiPeriod)
+
+// ATR for stop loss calculation
+atr = ta.atr(atrPeriod)
+
+// AutoTrend (simplified version - you may need to replace with actual AutoTrend)
+[supertrend, direction] = ta.supertrend(3, 10)  // Placeholder - replace with actual AutoTrend
+autotrend = direction == 1 ? "bullish" : direction == -1 ? "bearish" : "neutral"
+
+// Higher Timeframe Trend (H1)
+htfTrend = request.security(syminfo.tickerid, "1H", ta.trend(close, 50))  // Simplified trend
+htf_trend = htfTrend ? "bullish" : "bearish"
+
+// ===== SIGNAL LOGIC =====
+// Buy Signal: RSI < oversold, AutoTrend bullish, HTF bullish
+buySignal = ta.crossover(rsi, rsiOversold) and autotrend == "bullish" and htf_trend == "bullish"
+
+// Sell Signal: RSI > overbought, AutoTrend bearish, HTF bearish
+sellSignal = ta.crossunder(rsi, rsiOverbought) and autotrend == "bearish" and htf_trend == "bearish"
+
+// ===== PLOTS =====
+plotshape(buySignal, style=shape.labelup, location=location.belowbar, color=color.green, text="BUY")
+plotshape(sellSignal, style=shape.labeldown, location=location.abovebar, color=color.red, text="SELL")
+
+// ===== ALERTS =====
+// Buy Alert
+alertcondition(buySignal, title="Buy Signal", message="BUY {{ticker}} @ {{close}} RSI: {{rsi}} AutoTrend: {{autotrend}} HTF: {{htf_trend}} ATR: {{atr}}")
+
+// Sell Alert
+alertcondition(sellSignal, title="Sell Signal", message="SELL {{ticker}} @ {{close}} RSI: {{rsi}} AutoTrend: {{autotrend}} HTF: {{htf_trend}} ATR: {{atr}}")
