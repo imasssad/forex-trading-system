@@ -175,10 +175,13 @@ async def lifespan(app: FastAPI):
         
         # Sync local trades with OANDA on startup
         try:
-            orphaned = await sync_trades_with_oanda(oanda_client)
-            if orphaned > 0:
-                logger.warning(f"Closed {orphaned} orphaned trades that failed to execute on OANDA")
-                database.log_activity("info", f"Trade sync: closed {orphaned} orphaned trades")
+            sync_result = await sync_trades_with_oanda(oanda_client)
+            if sync_result["orphaned_closed"] > 0:
+                logger.warning(f"Closed {sync_result['orphaned_closed']} orphaned trades that failed to execute on OANDA")
+                database.log_activity("info", f"Trade sync: closed {sync_result['orphaned_closed']} orphaned trades")
+            if sync_result["imported"] > 0:
+                logger.info(f"Imported {sync_result['imported']} trades from OANDA to database")
+                database.log_activity("info", f"Trade sync: imported {sync_result['imported']} trades from OANDA")
         except Exception as sync_error:
             logger.error(f"Trade sync failed: {sync_error}")
     except Exception as e:
