@@ -624,22 +624,40 @@ async def api_close_trade(req: CloseTradeRequest):
     """Manually close a trade on OANDA and update DB."""
     # Accept trade_id as string or int
     trade_id = req.trade_id
+    
+    # Get all open trades to search
+    open_trades = database.get_open_trades()
+    
+    # First, try to find by database ID
+    if isinstance(trade_id, int):
+        trade = next((t for t in open_trades if t['id'] == trade_id), None)
+    else:
+        # If string, convert to int and try database ID first
+        if trade_id.isdigit():
+            trade_id_int = int(trade_id)
+            trade = next((t for t in open_trades if t['id'] == trade_id_int), None)
+            # If not found by database ID, try OANDA trade ID
+            if not trade:
+                trade = next((t for t in open_trades if str(t.get('oanda_trade_id')) == trade_id), None)
+                if trade:
+                    trade_id = trade['id']  # Use database ID for closing
+        else:
+            # Non-numeric string, try as OANDA trade ID
+            trade = next((t for t in open_trades if str(t.get('oanda_trade_id')) == trade_id), None)
+            if trade:
+                trade_id = trade['id']
+    
+    # Ensure trade_id is now an int (database ID)
     if isinstance(trade_id, str):
         if trade_id.isdigit():
             trade_id = int(trade_id)
         else:
-            # Try to find trade by oanda_trade_id
-            open_trades = database.get_open_trades()
-            found = next((t for t in open_trades if str(t.get('oanda_trade_id')) == trade_id), None)
-            if found:
-                trade_id = found['id']
-            else:
-                logger.error(f"Trade ID {trade_id} not found.")
-                raise HTTPException(status_code=404, detail="Trade not found.")
-
-    # Check if trade exists in database and get its details
-    open_trades = database.get_open_trades()
-    trade = next((t for t in open_trades if t['id'] == trade_id), None)
+            logger.error(f"Invalid trade_id format: {trade_id}")
+            raise HTTPException(status_code=400, detail="Invalid trade_id format.")
+    
+    # Re-find trade with final trade_id
+    if not trade:
+        trade = next((t for t in open_trades if t['id'] == trade_id), None)
     if not trade:
         logger.error(f"Trade {trade_id} not found or already closed.")
         raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found or already closed.")
