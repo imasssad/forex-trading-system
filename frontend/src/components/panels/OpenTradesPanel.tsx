@@ -154,7 +154,7 @@ export default function OpenTradesPanel() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-4 gap-4 text-2xs">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-2xs">
                   <div>
                     <span className="text-subtle">Entry</span>
                     <div className="text-gray-300 font-medium">{trade.entry_price}</div>
@@ -163,6 +163,17 @@ export default function OpenTradesPanel() {
                     <span className="text-subtle">Current</span>
                     <div className={`font-medium ${isProfitable ? 'text-bull' : 'text-bear'}`}>
                       {trade.current_price || trade.entry_price}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-subtle">Opened</span>
+                    <div className="text-gray-300 font-medium">
+                      {trade.open_time ? new Date(trade.open_time).toLocaleString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      }) : '---'}
                     </div>
                   </div>
                   <div>

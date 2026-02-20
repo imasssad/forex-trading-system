@@ -153,7 +153,7 @@ export default function TradeHistoryPanel({ compact = false }: TradeHistoryPanel
                   </div>
                 </div>
 
-                <div className="grid grid-cols-4 gap-3 text-2xs">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-2xs">
                   <div>
                     <span className="text-subtle">Entry</span>
                     <div className="text-gray-300 font-medium">{trade.entry_price.toFixed(5)}</div>
@@ -161,6 +161,10 @@ export default function TradeHistoryPanel({ compact = false }: TradeHistoryPanel
                   <div>
                     <span className="text-subtle">Exit</span>
                     <div className="text-gray-300 font-medium">{trade.exit_price.toFixed(5)}</div>
+                  </div>
+                  <div>
+                    <span className="text-subtle">Opened</span>
+                    <div className="text-gray-300 font-medium">{formatDate(trade.open_time)}</div>
                   </div>
                   <div>
                     <span className="text-subtle">Closed</span>
