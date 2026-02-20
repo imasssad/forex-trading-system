@@ -71,7 +71,9 @@ def parse_tradingview_alert(data: Dict) -> Optional[TradingSignal]:
         "autotrend": "bullish" or "bearish",
         "htf_trend": "bullish" or "bearish",
         "price": 1.0850,
-        "atr": 0.0015
+        "atr": 0.0015,
+        "swing_low": 1.0820,   # For long trades (ATS Rule)
+        "swing_high": 1.0880   # For short trades (ATS Rule)
     }
     """
     try:
@@ -96,7 +98,7 @@ def parse_tradingview_alert(data: Dict) -> Optional[TradingSignal]:
         tf = data.get("timeframe", "15")
         entry_timeframe = f"M{tf}" if tf.isdigit() else tf
         
-        # Create signal
+        # Create signal with ATS swing levels
         signal = TradingSignal(
             instrument=instrument,
             signal_type=signal_type,
@@ -106,7 +108,9 @@ def parse_tradingview_alert(data: Dict) -> Optional[TradingSignal]:
             autotrend_direction=data.get("autotrend", "neutral").lower(),
             htf_trend=data.get("htf_trend", "neutral").lower(),
             entry_price=float(data.get("price", 0)),
-            atr_value=float(data.get("atr", 0)) if data.get("atr") else None
+            atr_value=float(data.get("atr", 0)) if data.get("atr") else None,
+            swing_low=float(data.get("swing_low")) if data.get("swing_low") else None,
+            swing_high=float(data.get("swing_high")) if data.get("swing_high") else None
         )
         
         return signal
@@ -150,15 +154,47 @@ def execute_trade(signal: TradingSignal, decision) -> Dict:
     try:
         config = DEFAULT_CONFIG
         
-        # Calculate stop loss
-        if config.risk.USE_ATR_STOP and signal.atr_value:
-            stop_distance = signal.atr_value * config.risk.ATR_MULTIPLIER
-        else:
-            pip_size = oanda_client.PIP_SIZES.get(signal.instrument, 0.0001)
-            stop_distance = config.risk.FIXED_STOP_PIPS * pip_size
+        # Calculate stop loss using ATS rules: swing low/high
+        pip_size = oanda_client.PIP_SIZES.get(signal.instrument, 0.0001)
         
-        # Calculate position size
-        stop_pips = stop_distance / oanda_client.PIP_SIZES.get(signal.instrument, 0.0001)
+        if signal.signal_type == SignalType.BUY:
+            # LONG: Stop at swing low (ATS Official Rule)
+            if signal.swing_low:
+                # Use swing low minus small buffer (2 pips)
+                stop_loss = signal.swing_low - (2 * pip_size)
+            elif config.risk.USE_ATR_STOP and signal.atr_value:
+                # Fallback to ATR if swing not provided
+                stop_distance = signal.atr_value * config.risk.ATR_MULTIPLIER
+                stop_loss = signal.entry_price - stop_distance
+            else:
+                # Final fallback to fixed pips
+                stop_distance = config.risk.FIXED_STOP_PIPS * pip_size
+                stop_loss = signal.entry_price - stop_distance
+            
+            # Calculate TP at 2R (will exit 50% here per ATS strategy)
+            risk = signal.entry_price - stop_loss
+            take_profit = signal.entry_price + (risk * config.risk.RISK_REWARD_RATIO)
+            
+        else:  # SELL
+            # SHORT: Stop at swing high (ATS Official Rule)
+            if signal.swing_high:
+                # Use swing high plus small buffer (2 pips)
+                stop_loss = signal.swing_high + (2 * pip_size)
+            elif config.risk.USE_ATR_STOP and signal.atr_value:
+                # Fallback to ATR if swing not provided
+                stop_distance = signal.atr_value * config.risk.ATR_MULTIPLIER
+                stop_loss = signal.entry_price + stop_distance
+            else:
+                # Final fallback to fixed pips
+                stop_distance = config.risk.FIXED_STOP_PIPS * pip_size
+                stop_loss = signal.entry_price + stop_distance
+            
+            # Calculate TP at 2R (will exit 50% here per ATS strategy)
+            risk = stop_loss - signal.entry_price
+            take_profit = signal.entry_price - (risk * config.risk.RISK_REWARD_RATIO)
+        
+        # Calculate position size for 2% risk (ATS rule)
+        stop_pips = abs(signal.entry_price - stop_loss) / pip_size
         units = oanda_client.calculate_position_size(
             signal.instrument,
             stop_pips,
@@ -168,14 +204,6 @@ def execute_trade(signal: TradingSignal, decision) -> Dict:
         # Determine direction
         if signal.signal_type == SignalType.SELL:
             units = -units
-        
-        # Calculate SL and TP prices
-        if signal.signal_type == SignalType.BUY:
-            stop_loss = signal.entry_price - stop_distance
-            take_profit = signal.entry_price + (stop_distance * config.risk.RISK_REWARD_RATIO)
-        else:
-            stop_loss = signal.entry_price + stop_distance
-            take_profit = signal.entry_price - (stop_distance * config.risk.RISK_REWARD_RATIO)
         
         # Place order
         result = oanda_client.place_market_order(

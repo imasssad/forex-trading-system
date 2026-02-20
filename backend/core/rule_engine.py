@@ -48,6 +48,10 @@ class TradingSignal:
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     atr_value: Optional[float] = None
+    
+    #ATS official rules: swing levels for stop loss
+    swing_low: Optional[float] = None   # For long trades
+    swing_high: Optional[float] = None  # For short trades
 
     # New fields for cost modeling
     spread: Optional[float] = None

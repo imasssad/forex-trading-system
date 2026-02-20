@@ -7,6 +7,7 @@ rsiOversold = input.int(30, "RSI Oversold", minval=1, maxval=100)
 rsiOverbought = input.int(70, "RSI Overbought", minval=1, maxval=100)
 atrPeriod = input.int(14, "ATR Period", minval=1)
 atrMultiplier = input.float(1.5, "ATR Multiplier", minval=0.1, step=0.1)
+swingLookback = input.int(5, "Swing Lookback", minval=2, maxval=20)
 
 // ===== INDICATORS =====
 // RSI
@@ -23,6 +24,21 @@ autotrend = direction == 1 ? "bullish" : direction == -1 ? "bearish" : "neutral"
 htfTrend = request.security(syminfo.tickerid, "1H", ta.trend(close, 50))  // Simplified trend
 htf_trend = htfTrend ? "bullish" : "bearish"
 
+// ===== SWING LEVELS (ATS OFFICIAL RULE) =====
+// Find swing low for long stop loss
+var float swing_low = na
+var float swing_high = na
+
+// Calculate swing low (last pivot low before trend change)
+pivotLow = ta.pivotlow(low, swingLookback, swingLookback)
+if not na(pivotLow)
+    swing_low := pivotLow
+
+// Calculate swing high (last pivot high before trend change)
+pivotHigh = ta.pivothigh(high, swingLookback, swingLookback)
+if not na(pivotHigh)
+    swing_high := pivotHigh
+
 // ===== SIGNAL LOGIC =====
 // Buy Signal: RSI < oversold, AutoTrend bullish, HTF bullish
 buySignal = ta.crossover(rsi, rsiOversold) and autotrend == "bullish" and htf_trend == "bullish"
@@ -34,9 +50,16 @@ sellSignal = ta.crossunder(rsi, rsiOverbought) and autotrend == "bearish" and ht
 plotshape(buySignal, style=shape.labelup, location=location.belowbar, color=color.green, text="BUY")
 plotshape(sellSignal, style=shape.labeldown, location=location.abovebar, color=color.red, text="SELL")
 
-// ===== ALERTS =====
-// Buy Alert
-alertcondition(buySignal, title="Buy Signal", message="BUY {{ticker}} @ {{close}} RSI: {{rsi}} AutoTrend: {{autotrend}} HTF: {{htf_trend}} ATR: {{atr}}")
+// Plot swing levels for visualization
+plot(swing_low, title="Swing Low", color=color.new(color.green, 50), linewidth=1, style=plot.style_stepline)
+plot(swing_high, title="Swing High", color=color.new(color.red, 50), linewidth=1, style=plot.style_stepline)
 
-// Sell Alert
-alertcondition(sellSignal, title="Sell Signal", message="SELL {{ticker}} @ {{close}} RSI: {{rsi}} AutoTrend: {{autotrend}} HTF: {{htf_trend}} ATR: {{atr}}")
+// ===== WEBHOOK ALERTS FOR FASTAPI =====
+// Alert message format for webhook
+alertMessage = '{"symbol": "' + syminfo.ticker + '", "action": "' + (buySignal ? 'buy' : 'sell') + '", "timeframe": "' + str.tostring(timeframe.period) + '", "rsi": ' + str.tostring(rsi) + ', "autotrend": "' + autotrend + '", "htf_trend": "' + htf_trend + '", "price": ' + str.tostring(close) + ', "atr": ' + str.tostring(atr) + ', "swing_low": ' + str.tostring(swing_low) + ', "swing_high": ' + str.tostring(swing_high) + '}'
+
+// Buy Alert with JSON webhook
+alertcondition(buySignal, title="Buy Signal", message=alertMessage)
+
+// Sell Alert with JSON webhook
+alertcondition(sellSignal, title="Sell Signal", message=alertMessage)

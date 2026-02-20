@@ -186,7 +186,13 @@ class PositionManager:
                 logger.info(f"[AGGRESSIVE] Full exit at 10R: {trade.instrument}")
                 return True
             except Exception as e:
-                logger.error(f"Aggressive exit failed: {e}")
+                error_str = str(e)
+                if "TRADE_DOESNT_EXIST" in error_str or "404" in error_str:
+                    logger.warning(f"Trade {trade.trade_id} doesn't exist on OANDA (orphaned) - removing from management")
+                    trade.remaining_units = 0
+                    return True
+                else:
+                    logger.error(f"Aggressive exit failed: {e}")
         return False
 
     def _check_scaling_exit(self, trade: ManagedTrade, current_price: float) -> bool:
@@ -232,7 +238,13 @@ class PositionManager:
                 logger.info(f"[SCALING] Full exit at 3R: {trade.instrument}")
                 return True
             except Exception as e:
-                logger.error(f"Scaling exit failed: {e}")
+                error_str = str(e)
+                if "TRADE_DOESNT_EXIST" in error_str or "404" in error_str:
+                    logger.warning(f"Trade {trade.trade_id} doesn't exist on OANDA (orphaned) - removing from management")
+                    trade.remaining_units = 0
+                    return True
+                else:
+                    logger.error(f"Scaling exit failed: {e}")
         return False
 
     def _check_dpl_exit(self, trade: ManagedTrade, current_price: float) -> bool:
@@ -299,7 +311,13 @@ class PositionManager:
             return True
 
         except Exception as e:
-            logger.error(f"Error executing partial close: {e}")
+            error_str = str(e)
+            if "TRADE_DOESNT_EXIST" in error_str or "404" in error_str:
+                logger.warning(f"Trade {trade.trade_id} doesn't exist on OANDA (orphaned) - marking as fully closed")
+                trade.remaining_units = 0
+                return True
+            else:
+                logger.error(f"Error executing partial close: {e}")
             return False
     
     def _set_trailing_stop(self, trade: ManagedTrade):
@@ -390,7 +408,13 @@ class PositionManager:
                     logger.info(f"ATS exit: Closed {instrument} {trade.direction}, P/L: {pl_pips:.1f} pips")
                     
                 except Exception as e:
-                    logger.error(f"Error closing trade on ATS exit: {e}")
+                    error_str = str(e)
+                    if "TRADE_DOESNT_EXIST" in error_str or "404" in error_str:
+                        logger.warning(f"ATS exit: Trade {trade_id} doesn't exist on OANDA (orphaned) - removing from management")
+                        del self.managed_trades[trade_id]
+                        trades_closed += 1
+                    else:
+                        logger.error(f"Error closing trade on ATS exit: {e}")
         
         return trades_closed > 0
     
@@ -433,7 +457,12 @@ class PositionManager:
                     del self.managed_trades[trade_id]
                     
                 except Exception as e:
-                    logger.error(f"Error on news exit: {e}")
+                    error_str = str(e)
+                    if "TRADE_DOESNT_EXIST" in error_str or "404" in error_str:
+                        logger.warning(f"News exit: Trade {trade_id} doesn't exist on OANDA (orphaned) - removing from management")
+                        del self.managed_trades[trade_id]
+                    else:
+                        logger.error(f"Error on news exit: {e}")
     
     def monitor_cycle(self):
         """Single monitoring cycle - check all active trades"""

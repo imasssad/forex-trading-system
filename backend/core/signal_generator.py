@@ -247,19 +247,43 @@ class SignalGenerator:
             
             direction = "long" if signal.signal_type == SignalType.BUY else "short"
             
-            # Calculate SL and TP
-            if signal.atr_value:
-                stop_distance = signal.atr_value * self.config.risk.ATR_MULTIPLIER
-            else:
-                pip_size = self.oanda_client.PIP_SIZES.get(signal.instrument, 0.0001) if self.oanda_client else 0.0001
-                stop_distance = self.config.risk.FIXED_STOP_PIPS * pip_size
+            # Calculate SL using ATS rules: swing low/high (if available)\n            pip_size = self.oanda_client.PIP_SIZES.get(signal.instrument, 0.0001) if self.oanda_client else 0.0001
             
             if signal.signal_type == SignalType.BUY:
-                stop_loss = signal.entry_price - stop_distance
-                take_profit = signal.entry_price + (stop_distance * self.config.risk.RISK_REWARD_RATIO)
-            else:
-                stop_loss = signal.entry_price + stop_distance
-                take_profit = signal.entry_price - (stop_distance * self.config.risk.RISK_REWARD_RATIO)
+                # LONG: Stop at swing low (ATS Official Rule)
+                if signal.swing_low:
+                    # Use swing low minus small buffer (2 pips)
+                    stop_loss = signal.swing_low - (2 * pip_size)
+                elif signal.atr_value:
+                    # Fallback to ATR if swing not provided
+                    stop_distance = signal.atr_value * self.config.risk.ATR_MULTIPLIER
+                    stop_loss = signal.entry_price - stop_distance
+                else:
+                    # Final fallback to fixed pips
+                    stop_distance = self.config.risk.FIXED_STOP_PIPS * pip_size
+                    stop_loss = signal.entry_price - stop_distance
+                
+                # Calculate TP at 2R (will exit 50% here per ATS strategy)
+                risk = signal.entry_price - stop_loss
+                take_profit = signal.entry_price + (risk * self.config.risk.RISK_REWARD_RATIO)
+                
+            else:  # SELL
+                # SHORT: Stop at swing high (ATS Official Rule)
+                if signal.swing_high:
+                    # Use swing high plus small buffer (2 pips)
+                    stop_loss = signal.swing_high + (2 * pip_size)
+                elif signal.atr_value:
+                    # Fallback to ATR if swing not provided
+                    stop_distance = signal.atr_value * self.config.risk.ATR_MULTIPLIER
+                    stop_loss = signal.entry_price + stop_distance
+                else:
+                    # Final fallback to fixed pips
+                    stop_distance = self.config.risk.FIXED_STOP_PIPS * pip_size
+                    stop_loss = signal.entry_price + stop_distance
+                
+                # Calculate TP at 2R (will exit 50% here per ATS strategy)
+                risk = stop_loss - signal.entry_price
+                take_profit = signal.entry_price - (risk * self.config.risk.RISK_REWARD_RATIO)
 
             # Execute on OANDA if not in paper trading mode
             oanda_trade_id = None

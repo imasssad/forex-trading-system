@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-02-16T22:55:50.764853+00:00",
+  "fetched_at": "2026-02-17T04:01:40.548127+00:00",
   "events": [
     {
       "title": "ECB President Lagarde Speaks",
@@ -966,7 +966,7 @@
       "country": "CAD",
       "date": "2026-02-20T08:30:00-05:00",
       "impact": "Low",
-      "forecast": "0.6%",
+      "forecast": "0.7%",
       "previous": "0.5%"
     },
     {
@@ -974,7 +974,7 @@
       "country": "USD",
       "date": "2026-02-20T08:30:00-05:00",
       "impact": "High",
-      "forecast": "2.8%",
+      "forecast": "3.0%",
       "previous": "3.0%"
     },
     {
@@ -990,7 +990,7 @@
       "country": "USD",
       "date": "2026-02-20T08:30:00-05:00",
       "impact": "Medium",
-      "forecast": "3.2%",
+      "forecast": "2.9%",
       "previous": "2.0%"
     },
     {
@@ -1014,7 +1014,7 @@
       "country": "USD",
       "date": "2026-02-20T09:45:00-05:00",
       "impact": "High",
-      "forecast": "52.1",
+      "forecast": "52.4",
       "previous": "51.9"
     },
     {
@@ -1022,7 +1022,7 @@
       "country": "USD",
       "date": "2026-02-20T09:45:00-05:00",
       "impact": "High",
-      "forecast": "52.8",
+      "forecast": "53.0",
       "previous": "52.5"
     },
     {
@@ -1038,7 +1038,7 @@
       "country": "USD",
       "date": "2026-02-20T10:00:00-05:00",
       "impact": "Medium",
-      "forecast": "735K",
+      "forecast": "732K",
       "previous": ""
     },
     {
@@ -1062,7 +1062,7 @@
       "country": "USD",
       "date": "2026-02-20T10:00:00-05:00",
       "impact": "Medium",
-      "forecast": "736K",
+      "forecast": "",
       "previous": "737K"
     },
     {

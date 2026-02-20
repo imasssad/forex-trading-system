@@ -167,6 +167,7 @@ async def lifespan(app: FastAPI):
     BOT_START_TIME = datetime.now(ZoneInfo("UTC"))
 
     # Init OANDA client
+    sync_task = None
     try:
         oanda_client = OandaClient(practice=True)
         summary = oanda_client.get_account_summary()
@@ -221,6 +222,27 @@ async def lifespan(app: FastAPI):
 
     external_signals_task = asyncio.create_task(fetch_external_signals_loop())
     logger.info("Automatic external signals fetching started")
+    
+    # Start automatic trade sync (every 10 minutes)
+    sync_task = None
+    if oanda_client:
+        async def periodic_trade_sync():
+            """Automatically sync trades with OANDA every 10 minutes"""
+            while True:
+                try:
+                    await asyncio.sleep(600)  # 10 minutes
+                    sync_result = await sync_trades_with_oanda(oanda_client)
+                    if sync_result["orphaned_closed"] > 0:
+                        logger.warning(f"Auto-sync: Closed {sync_result['orphaned_closed']} orphaned trades")
+                        database.log_activity("warning", f"Auto-sync: closed {sync_result['orphaned_closed']} orphaned trades")
+                    if sync_result["imported"] > 0:
+                        logger.info(f"Auto-sync: Imported {sync_result['imported']} trades from OANDA")
+                except Exception as e:
+                    logger.error(f"Auto-sync error: {e}")
+                    await asyncio.sleep(60)
+        
+        sync_task = asyncio.create_task(periodic_trade_sync())
+        logger.info("Automatic trade sync started (every 10 minutes)")
 
     # Initial news fetch
     try:
@@ -243,6 +265,12 @@ async def lifespan(app: FastAPI):
         external_signals_task.cancel()
         try:
             await external_signals_task
+        except asyncio.CancelledError:
+            pass
+    if sync_task and not sync_task.done():
+        sync_task.cancel()
+        try:
+            await sync_task
         except asyncio.CancelledError:
             pass
     database.log_activity("info", "Server shutting down")
@@ -466,6 +494,7 @@ async def webhook(payload: WebhookPayload):
 
         # Execute on OANDA if not in paper trading mode
         oanda_trade_id = None
+        execution_failed = False
         if not config.paper_trading and oanda_client:
             try:
                 oanda_result = oanda_client.place_market_order(
@@ -474,14 +503,21 @@ async def webhook(payload: WebhookPayload):
                     stop_loss_price=decision.stop_loss,
                     take_profit_price=decision.take_profit,
                 )
-                oanda_trade_id = oanda_result.get("id")
-                database.log_activity(
-                    "trade",
-                    f"LIVE {'BUY' if direction == 'long' else 'SELL'} "
-                    f"{signal.instrument} @ {signal.entry_price}",
-                    f"OANDA Trade #{oanda_trade_id} | SL: {decision.stop_loss} | TP: {decision.take_profit}",
-                )
+                # Validate that we got a trade ID
+                oanda_trade_id = oanda_result.get("orderFillTransaction", {}).get("tradeOpened", {}).get("tradeID")
+                if not oanda_trade_id:
+                    execution_failed = True
+                    logger.error(f"OANDA execution returned no trade ID for {signal.instrument}")
+                    database.log_activity("error", f"OANDA execution failed: No trade ID returned for {signal.instrument}")
+                else:
+                    database.log_activity(
+                        "trade",
+                        f"LIVE {'BUY' if direction == 'long' else 'SELL'} "
+                        f"{signal.instrument} @ {signal.entry_price}",
+                        f"OANDA Trade #{oanda_trade_id} | SL: {decision.stop_loss} | TP: {decision.take_profit}",
+                    )
             except Exception as e:
+                execution_failed = True
                 logger.error(f"OANDA execution failed: {e}")
                 database.log_activity("error", f"OANDA execution failed: {e}")
         else:
@@ -493,23 +529,31 @@ async def webhook(payload: WebhookPayload):
                 f"SL: {decision.stop_loss} | TP: {decision.take_profit} | Signal #{sig_id}",
             )
 
-        # Insert trade into DB
-        trade_id = database.insert_trade(
-            instrument=signal.instrument,
-            direction=direction,
-            units=units,
-            entry_price=signal.entry_price,
-            stop_loss=decision.stop_loss,
-            take_profit=decision.take_profit,
-            signal_id=sig_id,
-        )
+        # Only insert trade into DB if execution succeeded (or if in paper/no-broker mode)
+        if not execution_failed:
+            trade_id = database.insert_trade(
+                instrument=signal.instrument,
+                direction=direction,
+                units=units,
+                entry_price=signal.entry_price,
+                stop_loss=decision.stop_loss,
+                take_profit=decision.take_profit,
+                signal_id=sig_id,
+                oanda_trade_id=oanda_trade_id,
+            )
 
-        database.log_activity(
-            "info",
-            f"Signal APPROVED: {signal.signal_type.value} {signal.instrument}",
-            f"{'LIVE' if not config.paper_trading else 'PAPER'} mode | "
-            f"All {len(decision.checks_passed)} rule checks passed. Trade #{trade_id}",
-        )
+            database.log_activity(
+                "info",
+                f"Signal APPROVED: {signal.signal_type.value} {signal.instrument}",
+                f"{'LIVE' if not config.paper_trading else 'PAPER'} mode | "
+                f"All {len(decision.checks_passed)} rule checks passed. Trade #{trade_id}",
+            )
+        else:
+            database.log_activity(
+                "error",
+                f"Signal APPROVED but execution FAILED: {signal.signal_type.value} {signal.instrument}",
+                f"Trade not recorded in database due to OANDA execution failure",
+            )
     else:
         database.log_activity(
             "info",
@@ -664,6 +708,7 @@ async def api_close_trade(req: CloseTradeRequest):
 
     # Close on OANDA only if trade has an OANDA ID and we're not in paper trading mode
     oanda_trade_id = trade.get('oanda_trade_id')
+    trade_doesnt_exist = False
     if oanda_client and not config.paper_trading and oanda_trade_id:
         try:
             result = oanda_client.close_trade(trade_id=oanda_trade_id)
@@ -675,9 +720,16 @@ async def api_close_trade(req: CloseTradeRequest):
                 f"Fill: {fill_price} | P/L: ${realized_pl:.2f}",
             )
         except Exception as e:
-            logger.error(f"OANDA close failed for trade {trade_id}: {e}")
-            database.log_activity("error", f"OANDA close failed: {e}")
-            raise HTTPException(status_code=502, detail=f"OANDA close failed: {e}")
+            error_str = str(e)
+            # Check if trade doesn't exist on OANDA (orphaned trade)
+            if "TRADE_DOESNT_EXIST" in error_str or "404" in error_str:
+                trade_doesnt_exist = True
+                logger.warning(f"Trade {oanda_trade_id} doesn't exist on OANDA - marking as orphaned in DB")
+                database.log_activity("warning", f"Orphaned trade #{trade_id}", "Trade not found on OANDA - closing locally")
+            else:
+                logger.error(f"OANDA close failed for trade {trade_id}: {e}")
+                database.log_activity("error", f"OANDA close failed: {e}")
+                raise HTTPException(status_code=502, detail=f"OANDA close failed: {e}")
     else:
         mode = "PAPER" if config.paper_trading else "NO BROKER"
         database.log_activity(
@@ -688,13 +740,15 @@ async def api_close_trade(req: CloseTradeRequest):
 
     # Update local DB
     try:
-
+        # Use special close reason if trade was orphaned
+        close_reason = "orphaned_trade" if trade_doesnt_exist else req.close_reason
+        
         database.close_trade(
             trade_id=trade_id,
-            exit_price=req.exit_price,
-            profit_loss=req.profit_loss,
-            profit_pips=req.profit_pips,
-            close_reason=req.close_reason,
+            exit_price=req.exit_price if not trade_doesnt_exist else trade['entry_price'],
+            profit_loss=0.0 if trade_doesnt_exist else req.profit_loss,
+            profit_pips=0.0 if trade_doesnt_exist else req.profit_pips,
+            close_reason=close_reason,
         )
 
         # Return margin to virtual balance in paper trading mode
@@ -734,21 +788,29 @@ async def api_close_all_trades():
             oanda_trade_id = trade.get('oanda_trade_id')
             
             # Close on OANDA if trade has OANDA ID and we're not in paper mode
+            trade_doesnt_exist_bulk = False
             if oanda_client and not config.paper_trading and oanda_trade_id:
                 try:
                     oanda_client.close_trade(trade_id=oanda_trade_id)
                     logger.info(f"Closed OANDA trade {oanda_trade_id} (DB ID: {trade_id})")
                 except Exception as e:
-                    logger.error(f"Failed to close OANDA trade {oanda_trade_id}: {e}")
-                    errors.append(f"Trade {trade_id}: {str(e)}")
+                    error_str = str(e)
+                    # Check if trade doesn't exist on OANDA (orphaned trade)
+                    if "TRADE_DOESNT_EXIST" in error_str or "404" in error_str:
+                        trade_doesnt_exist_bulk = True
+                        logger.warning(f"Trade {oanda_trade_id} doesn't exist on OANDA - marking as orphaned")
+                    else:
+                        logger.error(f"Failed to close OANDA trade {oanda_trade_id}: {e}")
+                        errors.append(f"Trade {trade_id}: {str(e)}")
             
             # Close in database
+            close_reason = "orphaned_trade" if trade_doesnt_exist_bulk else "manual_close_all"
             database.close_trade(
                 trade_id=trade_id,
                 exit_price=trade['entry_price'],  # Use entry price as exit for emergency close
                 profit_loss=0,
                 profit_pips=0,
-                close_reason="manual_close_all"
+                close_reason=close_reason
             )
             
             # Return margin for paper trading
