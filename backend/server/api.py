@@ -789,9 +789,10 @@ async def api_close_all_trades():
             
             # Close on OANDA if trade has OANDA ID and we're not in paper mode
             trade_doesnt_exist_bulk = False
+            oanda_close_failed = False
             if oanda_client and not config.paper_trading and oanda_trade_id:
                 try:
-                    oanda_client.close_trade(trade_id=oanda_trade_id)
+                    result = oanda_client.close_trade(trade_id=oanda_trade_id)
                     logger.info(f"Closed OANDA trade {oanda_trade_id} (DB ID: {trade_id})")
                 except Exception as e:
                     error_str = str(e)
@@ -800,41 +801,55 @@ async def api_close_all_trades():
                         trade_doesnt_exist_bulk = True
                         logger.warning(f"Trade {oanda_trade_id} doesn't exist on OANDA - marking as orphaned")
                     else:
+                        oanda_close_failed = True
+                        error_msg = f"Trade {trade_id} (OANDA {oanda_trade_id}): {str(e)[:100]}"
                         logger.error(f"Failed to close OANDA trade {oanda_trade_id}: {e}")
-                        errors.append(f"Trade {trade_id}: {str(e)}")
+                        errors.append(error_msg)
+                        # Skip closing this trade in DB if OANDA close failed (not a 404)
+                        continue
             
-            # Close in database
-            close_reason = "orphaned_trade" if trade_doesnt_exist_bulk else "manual_close_all"
-            database.close_trade(
-                trade_id=trade_id,
-                exit_price=trade['entry_price'],  # Use entry price as exit for emergency close
-                profit_loss=0,
-                profit_pips=0,
-                close_reason=close_reason
-            )
-            
-            # Return margin for paper trading
-            if config.paper_trading and trade.get('units'):
-                margin_returned = abs(trade['units']) * trade['entry_price'] * 0.01
-                current_balance = database.get_virtual_balance()
-                database.update_virtual_balance(current_balance + margin_returned)
-            
-            closed_count += 1
+            # Close in database only if OANDA close succeeded or trade doesn't exist
+            if not oanda_close_failed:
+                close_reason = "orphaned_trade" if trade_doesnt_exist_bulk else "manual_close_all"
+                database.close_trade(
+                    trade_id=trade_id,
+                    exit_price=trade['entry_price'],  # Use entry price as exit for emergency close
+                    profit_loss=0,
+                    profit_pips=0,
+                    close_reason=close_reason
+                )
+                
+                # Return margin for paper trading
+                if config.paper_trading and trade.get('units'):
+                    margin_returned = abs(trade['units']) * trade['entry_price'] * 0.01
+                    current_balance = database.get_virtual_balance()
+                    database.update_virtual_balance(current_balance + margin_returned)
+                
+                closed_count += 1
             
         except Exception as e:
             logger.error(f"Failed to close trade {trade.get('id')}: {e}")
-            errors.append(f"Trade {trade.get('id')}: {str(e)}")
+            errors.append(f"Trade {trade.get('id')}: {str(e)[:100]}")
     
-    database.log_activity(
-        "trade",
-        f"CLOSE ALL — {closed_count} positions closed",
-        f"Errors: {len(errors)}" if errors else "All closed successfully"
-    )
+    # Log with detailed error info
+    if errors:
+        database.log_activity(
+            "trade",
+            f"CLOSE ALL — {closed_count} closed, {len(errors)} failed",
+            f"Errors: {'; '.join(errors[:3])}"  # Show first 3 errors
+        )
+    else:
+        database.log_activity(
+            "trade",
+            f"CLOSE ALL — {closed_count} positions closed",
+            "All closed successfully"
+        )
     
     return {
-        "success": True,
+        "success": closed_count > 0 or len(errors) == 0,
         "closed": closed_count,
-        "errors": errors if errors else None
+        "errors": errors if errors else None,
+        "message": f"{closed_count} closed, {len(errors)} failed" if errors else f"{closed_count} positions closed"
     }
 
 
