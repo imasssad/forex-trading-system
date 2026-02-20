@@ -1,10 +1,8 @@
-import type { Metadata } from 'next';
 import './globals.css';
-import { VisualEffects } from './components/VisualEffects';
 
-export const metadata: Metadata = {
-  title: 'Montgomery Trading Platform',
-  description: 'Montgomery Automated Forex Trading System',
+export const metadata = {
+  title: 'ATS Trading System',
+  description: 'Automated Trading System Dashboard',
 };
 
 export default function RootLayout({
@@ -13,11 +11,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <body suppressHydrationWarning>
-        {children}
-        <VisualEffects />
-      </body>
+    <html lang="en">
+      <body>{children}</body>
     </html>
   );
 }

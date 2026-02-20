@@ -1,139 +1,106 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  html {
-    @apply antialiased;
-  }
-  body {
-    @apply bg-panel-bg text-gray-200 font-sans text-sm;
-  }
-  ::-webkit-scrollbar { width: 5px; height: 5px; }
-  ::-webkit-scrollbar-track { background: #0B0E11; }
-  ::-webkit-scrollbar-thumb { background: #1E2530; border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: #2A3442; }
-
-  /* Mobile optimizations */
-  @media (max-width: 640px) {
-    body {
-      font-size: 12px;
-    }
-    .stat-value {
-      font-size: 1rem !important;
-    }
-  }
+:root {
+  --color-bg: #0a0e16;
+  --color-panel: #111827;
+  --color-panel-hover: #1f2937;
+  --color-panel-border: #1f2937;
+  --color-primary: #3b82f6;
+  --color-bull: #10b981;
+  --color-bear: #ef4444;
+  --color-muted: #6b7280;
+  --color-subtle: #9ca3af;
 }
 
-@layer components {
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--color-bg);
+  color: #e5e7eb;
+  line-height: 1.5;
+}
+
+@layer utilities {
   .card {
-    @apply bg-panel-surface border border-panel-border rounded-lg;
+    @apply bg-panel rounded-lg border border-panel-border overflow-hidden;
   }
-  .card-elevated {
-    @apply bg-panel-elevated border border-panel-border rounded-lg;
-  }
-  .stat-value {
-    @apply font-display text-2xl font-bold tracking-tight;
-  }
-  .stat-label {
-    @apply text-2xs uppercase tracking-widest text-muted font-medium;
-  }
+
   .badge {
-    @apply inline-flex items-center px-2 py-0.5 rounded text-2xs font-semibold tracking-wide uppercase;
+    @apply px-2 py-1 rounded text-xs font-semibold;
   }
+
   .badge-bull {
-    @apply badge bg-bull-dim text-bull;
-    border: 1px solid rgba(0, 212, 170, 0.2);
+    @apply bg-bull/20 text-bull border border-bull/30;
   }
+
   .badge-bear {
-    @apply badge bg-bear-dim text-bear;
-    border: 1px solid rgba(255, 71, 87, 0.2);
+    @apply bg-bear/20 text-bear border border-bear/30;
   }
-  .badge-warn {
-    @apply badge bg-warn-dim text-warn;
-    border: 1px solid rgba(255, 179, 71, 0.2);
-  }
+
   .badge-neutral {
-    @apply badge bg-panel-elevated text-muted border border-panel-border;
-  }
-  .glow-line {
-    height: 1px;
-    background: linear-gradient(to right, transparent, rgba(0, 212, 170, 0.3), transparent);
-  }
-  .data-row {
-    @apply flex items-center justify-between py-2 px-3 transition-colors;
-    border-bottom: 1px solid rgba(30, 37, 48, 0.5);
-  }
-  .data-row:hover {
-    background: rgba(34, 42, 54, 0.5);
-  }
-  .nav-item {
-    @apply flex items-center gap-2.5 px-3 py-2 rounded-md text-muted hover:text-gray-200 hover:bg-panel-hover transition-all duration-150 text-xs font-medium;
-  }
-  .nav-item.active {
-    @apply text-accent-cyan border-l-2 border-accent-cyan;
-    background: rgba(0, 212, 170, 0.08);
-  }
-  .input-field {
-    @apply bg-panel-bg border border-panel-border rounded px-3 py-2 text-gray-200 text-xs transition-all;
-  }
-  .input-field:focus {
-    outline: none;
-    border-color: rgba(0, 212, 170, 0.5);
-    box-shadow: 0 0 0 1px rgba(0, 212, 170, 0.2);
-  }
-  .btn-primary {
-    @apply text-accent-cyan px-4 py-2 rounded text-xs font-semibold transition-all uppercase tracking-wider;
-    background: rgba(0, 212, 170, 0.15);
-    border: 1px solid rgba(0, 212, 170, 0.3);
-  }
-  .btn-primary:hover {
-    background: rgba(0, 212, 170, 0.25);
+    @apply bg-gray-700 text-gray-300 border border-gray-600;
   }
 
-  /* Mobile button styles */
-  @media (max-width: 640px) {
-    .btn-primary {
-      @apply px-3 py-1.5 text-2xs;
+  .text-muted {
+    color: var(--color-muted);
+  }
+
+  .text-subtle {
+    color: var(--color-subtle);
+  }
+
+  .text-bull {
+    color: var(--color-bull);
+  }
+
+  .text-bear {
+    color: var(--color-bear);
+  }
+
+  .text-primary {
+    color: var(--color-primary);
+  }
+
+  .text-2xs {
+    font-size: 0.625rem;
+    line-height: 0.875rem;
+  }
+
+  .bg-panel {
+    background-color: var(--color-panel);
+  }
+
+  .bg-panel-hover {
+    background-color: var(--color-panel-hover);
+  }
+
+  .border-panel-border {
+    border-color: var(--color-panel-border);
+  }
+
+  .bg-primary {
+    background-color: var(--color-primary);
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-in;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
     }
-    .nav-item {
-      @apply px-2 py-1.5 text-2xs;
+    to {
+      opacity: 1;
+      transform: translateY(0);
     }
   }
-  .btn-danger {
-    @apply text-bear px-4 py-2 rounded text-xs font-semibold transition-all uppercase tracking-wider;
-    background: rgba(255, 71, 87, 0.1);
-    border: 1px solid rgba(255, 71, 87, 0.3);
-  }
-  .btn-danger:hover {
-    background: rgba(255, 71, 87, 0.2);
-  }
-}
-
-/* Noise overlay for depth */
-.noise::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.02'/%3E%3C/svg%3E");
-  pointer-events: none;
-  z-index: 1;
-}
-
-/* Scanline effect for terminal feel */
-.scanlines::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0, 0, 0, 0.03) 2px,
-    rgba(0, 0, 0, 0.03) 4px
-  );
-  pointer-events: none;
-  z-index: 1;
 }

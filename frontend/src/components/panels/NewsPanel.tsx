@@ -1,140 +1,119 @@
 'use client';
 
-import { useState } from 'react';
-import { useNews } from '../../lib/hooks';
+import { useState, useEffect } from 'react';
 
-const IMPACT_STYLES: Record<string, { bg: string; text: string; border: string; dot: string }> = {
-  High: { bg: 'bg-bear/15', text: 'text-bear', border: 'border-bear/20', dot: 'bg-bear' },
-  Medium: { bg: 'bg-warn/15', text: 'text-warn', border: 'border-warn/20', dot: 'bg-warn' },
-  Low: { bg: 'bg-subtle/30', text: 'text-subtle', border: 'border-subtle/20', dot: 'bg-subtle' },
-};
+interface NewsPanelProps {
+  compact?: boolean;
+}
 
-const COUNTRY_FLAGS: Record<string, string> = {
-  USD: '🇺🇸',
-  EUR: '🇪🇺',
-  GBP: '🇬🇧',
-  JPY: '🇯🇵',
-  AUD: '🇦🇺',
-  NZD: '🇳🇿',
-  CHF: '🇨🇭',
-  CAD: '🇨🇦',
-};
+interface NewsEvent {
+  title: string;
+  country: string;
+  date: string;
+  impact: string;
+  forecast?: string;
+  previous?: string;
+}
 
-export default function NewsPanel({ compact = false }: { compact?: boolean }) {
-  const { events: allEvents, lastRefresh } = useNews();
-  const [expanded, setExpanded] = useState(false);
+export default function NewsPanel({ compact = false }: NewsPanelProps) {
+  const [events, setEvents] = useState<NewsEvent[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const isCompact = compact && !expanded;
-  const events = isCompact ? allEvents.filter((e) => e.impact === 'High').slice(0, 4) : allEvents;
-  const now = new Date();
+  useEffect(() => {
+    const fetchNews = async () => {
+      try {
+        const response = await fetch('/api/news/today');
+        if (response.ok) {
+          const data = await response.json();
+          setEvents(data.events || []);
+        }
+      } catch (error) {
+        console.error('Error fetching news:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-  // Group by date
-  const grouped: Record<string, typeof events> = {};
-  events.forEach((e) => {
-    const dateKey = new Date(e.date).toLocaleDateString('en-US', {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-    });
-    if (!grouped[dateKey]) grouped[dateKey] = [];
-    grouped[dateKey].push(e);
-  });
+    fetchNews();
+    const interval = setInterval(fetchNews, 300000); // Refresh every 5 minutes
+    return () => clearInterval(interval);
+  }, []);
+
+  const formatTime = (dateString: string) => {
+    try {
+      return new Date(dateString).toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return dateString;
+    }
+  };
+
+  const getImpactColor = (impact: string) => {
+    switch (impact?.toLowerCase()) {
+      case 'high': return 'text-bear';
+      case 'medium': return 'text-yellow-500';
+      case 'low': return 'text-gray-400';
+      default: return 'text-gray-400';
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="card">
+        <div className="px-4 py-3 border-b border-panel-border">
+          <span className="text-xs font-display font-semibold text-gray-200 uppercase tracking-wider">
+            News Events
+          </span>
+        </div>
+        <div className="p-8 text-center text-muted text-xs">
+          Loading...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="card">
-      <div className="px-4 py-3 border-b border-panel-border flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-display font-semibold text-gray-200 uppercase tracking-wider">
-            {isCompact ? 'Upcoming News' : 'Economic Calendar'}
-          </span>
-          {isCompact && (
-            <span className="badge-bear">HIGH IMPACT</span>
-          )}
-          {!isCompact && lastRefresh && (
-            <span className="text-2xs text-subtle">
-              Updated {new Date(lastRefresh).toLocaleTimeString()}
-            </span>
-          )}
+      <div className="px-4 py-3 border-b border-panel-border">
+        <span className="text-xs font-display font-semibold text-gray-200 uppercase tracking-wider">
+          Today's High Impact News
+        </span>
+      </div>
+      {events.length === 0 ? (
+        <div className="p-8 text-center text-muted text-xs">
+          No high impact news today
         </div>
-        {compact && (
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="text-2xs text-accent-cyan hover:underline transition-colors"
-          >
-            {expanded ? '← Collapse' : 'Full Calendar →'}
-          </button>
-        )}
-      </div>
-
-      <div className={isCompact ? 'max-h-64 overflow-y-auto' : expanded ? 'max-h-[70vh] overflow-y-auto' : ''}>
-        {Object.keys(grouped).length === 0 ? (
-          <div className="p-4 text-center text-muted text-xs">No upcoming news events</div>
-        ) : (
-          Object.entries(grouped).map(([date, dayEvents]) => (
-            <div key={date}>
-              <div className="px-4 py-1.5 bg-panel-bg/50 border-y border-panel-border/30">
-                <span className="text-2xs font-semibold text-subtle uppercase tracking-wider">
-                  {date}
-                </span>
-              </div>
-              {dayEvents.map((event, idx) => {
-                const styles = IMPACT_STYLES[event.impact] || IMPACT_STYLES.Low;
-                const eventDate = new Date(event.date);
-                const isPast = eventDate < now;
-                const isSoon =
-                  !isPast && eventDate.getTime() - now.getTime() < 2 * 60 * 60 * 1000; // 2hrs
-
-                return (
-                  <div
-                    key={`${event.title}-${idx}`}
-                    className={`data-row ${isPast ? 'opacity-40' : ''} ${
-                      isSoon ? 'bg-bear/5' : ''
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <div className={`w-1.5 h-1.5 rounded-full ${styles.dot} shrink-0`} />
-                      <span className="text-sm">{COUNTRY_FLAGS[event.country] || ''}</span>
-                      <div className="min-w-0">
-                        <div className="text-xs text-gray-200 truncate">
-                          {event.title}
-                        </div>
-                        <div className="text-2xs text-subtle">
-                          {event.country} ·{' '}
-                          {eventDate.toLocaleTimeString('en-US', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            timeZone: 'UTC',
-                          })}{' '}
-                          UTC
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4 shrink-0 text-2xs">
-                      {event.forecast && (
-                        <div className="text-right">
-                          <div className="text-subtle">Fcst</div>
-                          <div className="text-gray-300 font-medium">{event.forecast}</div>
-                        </div>
-                      )}
-                      {event.previous && (
-                        <div className="text-right">
-                          <div className="text-subtle">Prev</div>
-                          <div className="text-gray-400">{event.previous}</div>
-                        </div>
-                      )}
-                      <span
-                        className={`badge ${styles.bg} ${styles.text} border ${styles.border}`}
-                      >
-                        {event.impact}
-                      </span>
-                    </div>
+      ) : (
+        <div className={`divide-y divide-panel-border/50 ${compact ? 'max-h-64' : 'max-h-96'} overflow-y-auto`}>
+          {events.map((event, idx) => (
+            <div key={idx} className="px-4 py-3 hover:bg-panel-hover/30 transition-colors">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-semibold text-gray-100">{event.country}</span>
+                    <span className={`text-2xs font-semibold ${getImpactColor(event.impact)}`}>
+                      {event.impact?.toUpperCase()}
+                    </span>
                   </div>
-                );
-              })}
+                  <div className="text-xs text-gray-300">{event.title}</div>
+                  {(event.forecast || event.previous) && (
+                    <div className="text-2xs text-subtle mt-1">
+                      {event.forecast && `Forecast: ${event.forecast}`}
+                      {event.forecast && event.previous && ' | '}
+                      {event.previous && `Previous: ${event.previous}`}
+                    </div>
+                  )}
+                </div>
+                <div className="text-2xs text-subtle whitespace-nowrap">
+                  {formatTime(event.date)}
+                </div>
+              </div>
             </div>
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

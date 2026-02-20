@@ -1,69 +1,91 @@
 'use client';
 
-import { useAccount, useStatus } from '../../lib/hooks';
+import { useState, useEffect } from 'react';
+
+interface AccountData {
+  balance: number;
+  nav: number;
+  unrealized_pl: number;
+  margin_used: number;
+  margin_available: number;
+  open_trade_count: number;
+}
 
 export default function AccountPanel() {
-  const { account: a, isLive: accountLive } = useAccount();
-  const { status: s, isLive: statusLive } = useStatus();
+  const [account, setAccount] = useState<AccountData | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Default values
-  const account = a || {
-    nav: 0,
-    unrealized_pl: 0,
-    open_trade_count: 0,
-    margin_used: 0,
-    balance: 0
-  };
+  useEffect(() => {
+    const fetchAccount = async () => {
+      try {
+        const response = await fetch('/api/account');
+        if (response.ok) {
+          const data = await response.json();
+          setAccount(data);
+        }
+      } catch (error) {
+        console.error('Error fetching account:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-  const status = s || {
-    can_trade: false,
-    consecutive_losses: 0,
-    uptime_hours: 0
-  };
+    fetchAccount();
+    const interval = setInterval(fetchAccount, 10000); // Refresh every 10 seconds
+    return () => clearInterval(interval);
+  }, []);
 
-  const stats = [
-    {
-      label: 'NAV',
-      value: accountLive ? `$${account.nav.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '--',
-      color: 'text-gray-100',
-    },
-    {
-      label: 'Unrealized P&L',
-      value: accountLive ? `${account.unrealized_pl >= 0 ? '+' : ''}$${account.unrealized_pl.toFixed(2)}` : '--',
-      color: accountLive && account.unrealized_pl >= 0 ? 'text-bull' : 'text-bear',
-    },
-    {
-      label: 'Open Trades',
-      value: accountLive ? `${account.open_trade_count} / ${statusLive && status.can_trade ? '3 max' : 'PAUSED'}` : '--',
-      color: 'text-gray-100',
-    },
-    {
-      label: 'Margin Used',
-      value: accountLive ? `$${account.margin_used.toFixed(2)}` : '--',
-      color: 'text-gray-400',
-    },
-    {
-      label: 'Loss Streak',
-      value: statusLive ? `${status.consecutive_losses} / 4` : '--',
-      color: statusLive && status.consecutive_losses >= 3 ? 'text-warn' : 'text-gray-400',
-    },
-    {
-      label: 'Uptime',
-      value: statusLive ? `${status.uptime_hours.toFixed(1)}h` : '--',
-      color: 'text-gray-400',
-    },
-  ];
+  if (loading || !account) {
+    return (
+      <div className="card">
+        <div className="px-4 py-3 border-b border-panel-border">
+          <span className="text-xs font-display font-semibold text-gray-200 uppercase tracking-wider">
+            Account Summary
+          </span>
+        </div>
+        <div className="p-8 text-center text-muted text-xs">
+          Loading account data...
+        </div>
+      </div>
+    );
+  }
+
+  const isProfitable = account.unrealized_pl >= 0;
 
   return (
-    <div className="card p-0">
-      <div className="glow-line" />
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 divide-x divide-panel-border">
-        {stats.map((stat) => (
-          <div key={stat.label} className="p-3">
-            <div className="stat-label mb-1">{stat.label}</div>
-            <div className={`stat-value text-lg ${stat.color}`}>{stat.value}</div>
+    <div className="card">
+      <div className="px-4 py-3 border-b border-panel-border">
+        <span className="text-xs font-display font-semibold text-gray-200 uppercase tracking-wider">
+          Account Summary
+        </span>
+      </div>
+      <div className="p-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <div className="text-xs text-subtle mb-1">Balance</div>
+            <div className="text-lg font-bold text-gray-100">
+              ${account.balance.toFixed(2)}
+            </div>
           </div>
-        ))}
+          <div>
+            <div className="text-xs text-subtle mb-1">Equity (NAV)</div>
+            <div className="text-lg font-bold text-gray-100">
+              ${account.nav.toFixed(2)}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-subtle mb-1">Unrealized P/L</div>
+            <div className={`text-lg font-bold ${isProfitable ? 'text-bull' : 'text-bear'}`}>
+              {isProfitable ? '+' : ''}${account.unrealized_pl.toFixed(2)}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-subtle mb-1">Open Trades</div>
+            <div className="text-lg font-bold text-gray-100">
+              {account.open_trade_count}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

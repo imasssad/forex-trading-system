@@ -1,81 +1,113 @@
 'use client';
 
-import { useState } from 'react';
-import { useActivity } from '../../lib/hooks';
+import { useState, useEffect } from 'react';
 
-const LEVEL_STYLES = {
-  info: { dot: 'bg-accent-blue', text: 'text-gray-300' },
-  warn: { dot: 'bg-warn', text: 'text-warn' },
-  error: { dot: 'bg-bear', text: 'text-bear' },
-  trade: { dot: 'bg-accent-cyan', text: 'text-accent-cyan' },
-};
+interface ActivityPanelProps {
+  compact?: boolean;
+}
 
-export default function ActivityPanel({ compact = false }: { compact?: boolean }) {
-  const { logs: allLogs } = useActivity();
-  const [expanded, setExpanded] = useState(false);
-  
-  const isCompact = compact && !expanded;
-  const logs = isCompact ? allLogs.slice(0, 6) : allLogs;
+interface ActivityLog {
+  id: number;
+  timestamp: string;
+  level: string;
+  action: string;
+  details: string;
+}
 
-  return (
-    <div className="card">
-      <div className="px-4 py-3 border-b border-panel-border flex items-center justify-between">
-        <div className="flex items-center gap-2">
+export default function ActivityPanel({ compact = false }: ActivityPanelProps) {
+  const [logs, setLogs] = useState<ActivityLog[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchActivity = async () => {
+      try {
+        const limit = compact ? 10 : 50;
+        const response = await fetch(`/api/activity?limit=${limit}`);
+        if (response.ok) {
+          const data = await response.json();
+          setLogs(data.logs || []);
+        }
+      } catch (error) {
+        console.error('Error fetching activity:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchActivity();
+    const interval = setInterval(fetchActivity, 10000); // Refresh every 10 seconds
+    return () => clearInterval(interval);
+  }, [compact]);
+
+  const formatTime = (timestamp: string) => {
+    try {
+      return new Date(timestamp).toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    } catch {
+      return timestamp;
+    }
+  };
+
+  const getLevelColor = (level: string) => {
+    switch (level?.toLowerCase()) {
+      case 'error': return 'text-bear';
+      case 'warning': return 'text-yellow-500';
+      case 'success': return 'text-bull';
+      default: return 'text-gray-400';
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="card">
+        <div className="px-4 py-3 border-b border-panel-border">
           <span className="text-xs font-display font-semibold text-gray-200 uppercase tracking-wider">
             Activity Log
           </span>
         </div>
-        {compact && (
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="text-2xs text-accent-cyan hover:underline transition-colors"
-          >
-            {expanded ? '← Collapse' : 'View All →'}
-          </button>
-        )}
+        <div className="p-8 text-center text-muted text-xs">
+          Loading...
+        </div>
       </div>
+    );
+  }
 
-      <div className={isCompact ? 'max-h-56 overflow-y-auto' : 'max-h-[70vh] overflow-y-auto'}>
-        {logs.length === 0 ? (
-          <div className="p-4 text-center text-muted text-xs">No activity yet</div>
-        ) : (
-          logs.map((log) => {
-            const styles = LEVEL_STYLES[log.level] || LEVEL_STYLES.info;
-            const time = new Date(log.timestamp);
-
-            return (
-              <div
-                key={log.id}
-                className="data-row items-start"
-              >
-                <div className="flex items-start gap-2.5 flex-1 min-w-0">
-                  <div
-                    className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${styles.dot}`}
-                  />
-                  <div className="min-w-0">
-                    <div className={`text-xs ${styles.text} break-words`}>
-                      {log.message}
-                    </div>
-                    {log.details && (
-                      <div className="text-2xs text-subtle mt-0.5 font-mono">
-                        {log.details}
-                      </div>
-                    )}
+  return (
+    <div className="card">
+      <div className="px-4 py-3 border-b border-panel-border">
+        <span className="text-xs font-display font-semibold text-gray-200 uppercase tracking-wider">
+          Activity Log
+        </span>
+      </div>
+      {logs.length === 0 ? (
+        <div className="p-8 text-center text-muted text-xs">
+          No recent activity
+        </div>
+      ) : (
+        <div className={`divide-y divide-panel-border/50 ${compact ? 'max-h-64' : 'max-h-96'} overflow-y-auto`}>
+          {logs.map((log) => (
+            <div key={log.id} className="px-4 py-2 hover:bg-panel-hover/30 transition-colors">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-2xs font-semibold ${getLevelColor(log.level)}`}>
+                      {log.level?.toUpperCase()}
+                    </span>
+                    <span className="text-2xs text-gray-400">{log.action}</span>
                   </div>
+                  <div className="text-xs text-gray-300 truncate">{log.details}</div>
                 </div>
-                <div className="text-2xs text-subtle shrink-0 ml-3 tabular-nums">
-                  {time.toLocaleTimeString('en-US', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: false,
-                  })}
+                <div className="text-2xs text-subtle whitespace-nowrap">
+                  {formatTime(log.timestamp)}
                 </div>
               </div>
-            );
-          })
-        )}
-      </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
