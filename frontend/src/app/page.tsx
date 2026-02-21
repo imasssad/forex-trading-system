@@ -29,15 +29,33 @@ export default function Dashboard() {
   const router = useRouter();
   const [activeView, setActiveView] = useState<ActiveView>('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [authed, setAuthed] = useState(false);
 
-  // Auth guard — redirect to login if no valid token
+  // Auth guard — redirect to login if no valid token.
+  // Must use state (not inline isAuthenticated()) because localStorage is
+  // unavailable during SSR, causing a blank render without this pattern.
   useEffect(() => {
-    if (!isAuthenticated()) {
-      router.push('/login');
+    if (isAuthenticated()) {
+      setAuthed(true);
+    } else {
+      router.replace('/login');
     }
   }, [router]);
 
-  if (!isAuthenticated()) return null; // Prevent flash of dashboard before redirect
+  // Show dark loading screen while auth check completes (avoids blank flash)
+  if (!authed) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[#0B0E11]">
+        <div className="flex flex-col items-center gap-3">
+          <svg className="animate-spin h-8 w-8 text-[rgb(0,212,170)]" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <span className="text-sm text-[#5C6A7F]">Loading…</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
