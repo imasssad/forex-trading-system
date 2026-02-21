@@ -1,6 +1,5 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
 import { removeToken } from '../lib/auth';
 
 interface SidebarProps {
@@ -11,11 +10,9 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ activeView, onNavigate, isOpen, onToggle }: SidebarProps) {
-  const router = useRouter();
-
   function handleLogout() {
-    removeToken();
-    router.push('/login');
+    removeToken(); // clears the ats_auth cookie
+    window.location.href = '/login'; // hard navigation so middleware sees cleared cookie
   }
 
   const views = [
