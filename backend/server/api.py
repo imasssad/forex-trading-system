@@ -11,6 +11,8 @@ import os
 import sys
 import json
 import asyncio
+import secrets
+import jwt
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
@@ -450,6 +452,41 @@ def _build_system_status() -> Dict:
             "pnl_today": daily["pnl"],
         },
     }
+
+
+# ===================== AUTH =====================
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/auth/login")
+async def login(req: LoginRequest):
+    """
+    Validate dashboard credentials and return a signed JWT.
+    Credentials are read from environment variables:
+      DASHBOARD_USERNAME (default: admin)
+      DASHBOARD_PASSWORD (default: ats2024)
+      JWT_SECRET         (must be changed before deployment)
+    """
+    expected_user = os.getenv("DASHBOARD_USERNAME", "admin")
+    expected_pass = os.getenv("DASHBOARD_PASSWORD", "ats2024")
+    jwt_secret = os.getenv("JWT_SECRET", "change-this-to-a-random-64-char-string")
+
+    # Timing-safe comparison to prevent user enumeration
+    user_ok = secrets.compare_digest(req.username, expected_user)
+    pass_ok = secrets.compare_digest(req.password, expected_pass)
+
+    if not (user_ok and pass_ok):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    payload = {
+        "sub": req.username,
+        "exp": datetime.now(ZoneInfo("UTC")) + timedelta(hours=24),
+    }
+    token = jwt.encode(payload, jwt_secret, algorithm="HS256")
+    return {"access_token": token, "token_type": "bearer"}
 
 
 # ===================== WEBHOOK =====================
