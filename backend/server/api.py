@@ -12,6 +12,7 @@ import sys
 import json
 import asyncio
 import secrets
+import hashlib
 import jwt
 from dotenv import load_dotenv
 
@@ -465,18 +466,24 @@ class LoginRequest(BaseModel):
 async def login(req: LoginRequest):
     """
     Validate dashboard credentials and return a signed JWT.
-    Credentials are read from environment variables:
-      DASHBOARD_USERNAME (default: admin)
-      DASHBOARD_PASSWORD (default: ats2024)
-      JWT_SECRET         (must be changed before deployment)
+    Checks DB credentials first (created via /api/auth/signup).
+    Falls back to DASHBOARD_USERNAME / DASHBOARD_PASSWORD env vars.
     """
-    expected_user = os.getenv("DASHBOARD_USERNAME", "admin")
-    expected_pass = os.getenv("DASHBOARD_PASSWORD", "ats2024")
     jwt_secret = os.getenv("JWT_SECRET", "change-this-to-a-random-64-char-string")
 
-    # Timing-safe comparison to prevent user enumeration
-    user_ok = secrets.compare_digest(req.username, expected_user)
-    pass_ok = secrets.compare_digest(req.password, expected_pass)
+    db_user = database.get_setting("auth_user")
+    if db_user:
+        # Credentials were created via the signup page — validate against DB
+        db_hash = database.get_setting("auth_password_hash") or ""
+        pw_hash = hashlib.sha256(req.password.encode()).hexdigest()
+        user_ok = secrets.compare_digest(req.username, db_user)
+        pass_ok = secrets.compare_digest(pw_hash, db_hash)
+    else:
+        # Fall back to environment variables
+        expected_user = os.getenv("DASHBOARD_USERNAME", "admin")
+        expected_pass = os.getenv("DASHBOARD_PASSWORD", "ats2024")
+        user_ok = secrets.compare_digest(req.username, expected_user)
+        pass_ok = secrets.compare_digest(req.password, expected_pass)
 
     if not (user_ok and pass_ok):
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -487,6 +494,25 @@ async def login(req: LoginRequest):
     }
     token = jwt.encode(payload, jwt_secret, algorithm="HS256")
     return {"access_token": token, "token_type": "bearer"}
+
+
+@app.post("/api/auth/signup")
+async def signup(req: LoginRequest):
+    """
+    First-time account creation. Only succeeds if no account exists yet.
+    After calling this once, credentials are locked and subsequent calls return 409.
+    """
+    existing = database.get_setting("auth_user")
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="An account already exists. Please use the login page."
+        )
+
+    pw_hash = hashlib.sha256(req.password.encode()).hexdigest()
+    database.set_setting("auth_user", req.username)
+    database.set_setting("auth_password_hash", pw_hash)
+    return {"message": "Account created. Please log in."}
 
 
 # ===================== WEBHOOK =====================
