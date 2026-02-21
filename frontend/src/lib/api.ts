@@ -21,10 +21,11 @@ export interface AccountSummary {
 }
 
 export interface OpenTrade {
-  id: string;
+  id: string | number;
   instrument: string;
   units: number;
   price: number;
+  entry_price: number;
   current_price: number;
   unrealized_pl: number;
   stop_loss: number | null;

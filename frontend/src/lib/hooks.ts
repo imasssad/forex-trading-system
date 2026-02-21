@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import type { OpenTrade } from './api';
 
 export function useOpenTrades() {
-  const [trades, setTrades] = useState([]);
+  const [trades, setTrades] = useState<OpenTrade[]>([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = async () => {
