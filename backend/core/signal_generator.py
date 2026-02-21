@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
+from zoneinfo import ZoneInfo
 import asyncio
 import sys
 import os
@@ -18,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.rule_engine import TradingRuleEngine, TradingSignal, SignalType
 from core.correlation_filter import OpenPosition, TradeDirection
 from brokers.oanda import OandaClient
-from config.settings import TradingConfig, DEFAULT_CONFIG
+from config.settings import TradingConfig, DEFAULT_CONFIG, ATSStrategy
 from database import db as database
 
 logger = logging.getLogger(__name__)
@@ -36,9 +37,17 @@ class SignalGenerator:
         """Generate signals for all allowed pairs"""
         signals = []
 
+        # Create one NewsFilter instance shared across all pairs this cycle
+        from news.forex_factory import NewsFilter
+        news_filter = NewsFilter()
+        news_filter.refresh()
+
+        # Fetch open trades once; reused inside _analyze_pair
+        open_trades = self._get_open_trades_cached()
+
         for pair in self.config.pairs.ALLOWED_PAIRS:
             try:
-                signal = self._analyze_pair(pair)
+                signal = self._analyze_pair(pair, news_filter=news_filter, open_trades=open_trades)
                 if signal:
                     signals.append(signal)
             except Exception as e:
@@ -46,27 +55,37 @@ class SignalGenerator:
 
         return signals
 
-    def _analyze_pair(self, instrument: str) -> Optional[TradingSignal]:
+    def _get_open_trades_cached(self):
+        """Fetch open trades once per cycle."""
+        from database import db as database
+        return database.get_open_trades()
+
+    def _analyze_pair(
+        self,
+        instrument: str,
+        news_filter=None,
+        open_trades=None,
+    ) -> Optional[TradingSignal]:
         """Analyze a single pair and generate signal if conditions met"""
         if not self.oanda_client:
             return None
 
+        # Use pre-fetched open trades (avoid redundant DB queries per pair)
+        if open_trades is None:
+            open_trades = database.get_open_trades()
+
         # Check if we already have an open trade for this instrument
-        open_trades = database.get_open_trades()
         for trade in open_trades:
             if trade['instrument'] == instrument:
                 logger.debug(f"Skipping {instrument} - already have open trade #{trade['id']}")
                 return None
 
-        # Enforce allowed pairs
-        allowed_pairs = ["EUR_USD", "USD_JPY", "GBP_USD", "AUD_USD", "NZD_USD", "USD_CHF", "USD_CAD"]
-        if instrument not in allowed_pairs:
-            return None
-
         # News filter: block trades around high-impact news
-        from news.forex_factory import NewsFilter
-        news_filter = NewsFilter()
-        news_filter.refresh()
+        # Use shared instance passed from generate_signals() to respect rate limiting
+        if news_filter is None:
+            from news.forex_factory import NewsFilter
+            news_filter = NewsFilter()
+            news_filter.refresh()
         can_trade, reason = news_filter.can_open_trade(instrument)
         if not can_trade:
             logger.info(f"Blocked {instrument} due to news: {reason}")
@@ -88,7 +107,6 @@ class SignalGenerator:
 
         # Correlation filter: avoid duplicate exposure
         from core.correlation_filter import CorrelationFilter, TradeDirection, OpenPosition
-        open_trades = database.get_open_trades()
         open_positions = []
         for trade in open_trades:
             direction = TradeDirection.LONG if trade['direction'] == 'long' else TradeDirection.SHORT
@@ -99,7 +117,7 @@ class SignalGenerator:
                 entry_time=trade['open_time'],
                 size=trade['units']
             ))
-        corr_filter = CorrelationFilter(correlation_threshold=0.70)
+        corr_filter = CorrelationFilter(correlation_threshold=self.config.indicators.CORRELATION_THRESHOLD)
         direction = TradeDirection.LONG if autotrend_direction == "bullish" else TradeDirection.SHORT
         is_duplicate, reason = corr_filter.would_duplicate_exposure(instrument, direction, open_positions)
         if is_duplicate:
@@ -112,15 +130,21 @@ class SignalGenerator:
         if signal_type == SignalType.NEUTRAL:
             return None
 
+        # Find swing levels for ATS stop placement (Standard / Scaling / DPL strategies)
+        swing_low, swing_high = self._find_swing_levels(candles, autotrend_direction)
+
+        # For Strategy 2 (Aggressive), find the trend-change bar for SL placement
+        trend_bar_low, trend_bar_high = None, None
+        if self.config.ats_strategy == ATSStrategy.AGGRESSIVE:
+            trend_bar_low, trend_bar_high = self._find_trend_change_bar(candles)
+
         # Create signal
         current_price = candles[-1]['close']
-        # Estimate spread and fee (example: 0.0002 spread, $2 fee per 100k)
         spread = 0.0002
-        fee = 2 * (100000 / 100000)  # $2 per 100k units
         signal = TradingSignal(
             instrument=instrument,
             signal_type=signal_type,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(ZoneInfo("UTC")).isoformat(),
             entry_timeframe="M15",
             rsi_value=rsi_value,
             autotrend_direction=autotrend_direction,
@@ -128,7 +152,10 @@ class SignalGenerator:
             entry_price=current_price + spread,
             atr_value=atr_value,
             spread=spread,
-            fee=fee
+            swing_low=swing_low,
+            swing_high=swing_high,
+            trend_bar_low=trend_bar_low,
+            trend_bar_high=trend_bar_high,
         )
 
         return signal
@@ -207,6 +234,66 @@ class SignalGenerator:
         else:
             return "bearish"
 
+    def _find_swing_levels(self, candles: List[Dict], direction: str) -> tuple:
+        """Find the most recent swing low (for long SL) and swing high (for short SL).
+
+        A swing low is a bar whose low is lower than both its neighbours.
+        A swing high is a bar whose high is higher than both its neighbours.
+        We iterate backwards so we always get the *most recent* swing.
+        """
+        if len(candles) < 5:
+            return None, None
+
+        recent = candles[-20:]  # Limit search to last 20 bars
+        swing_low = None
+        swing_high = None
+
+        # Most recent swing low (skip the last bar — it may not be confirmed yet)
+        for i in range(len(recent) - 2, 0, -1):
+            if recent[i]['low'] < recent[i - 1]['low'] and recent[i]['low'] < recent[i + 1]['low']:
+                swing_low = recent[i]['low']
+                break
+
+        # Most recent swing high
+        for i in range(len(recent) - 2, 0, -1):
+            if recent[i]['high'] > recent[i - 1]['high'] and recent[i]['high'] > recent[i + 1]['high']:
+                swing_high = recent[i]['high']
+                break
+
+        return swing_low, swing_high
+
+    def _find_trend_change_bar(self, candles: List[Dict]) -> tuple:
+        """Find the bar that caused the most recent EMA crossover (ATS trend change).
+
+        Used by Strategy 2 (Aggressive) to place the stop loss at the low/high
+        of the bar that flipped the ATS direction.
+
+        Returns:
+            (trend_bar_low, trend_bar_high) — the low and high of the crossover bar,
+            or (None, None) if no crossover is found in the lookback window.
+        """
+        if len(candles) < 31:
+            return None, None
+
+        closes = [c['close'] for c in candles]
+
+        # Compute EMA diffs at each valid position (need 30 bars for ema_long)
+        ema_diffs = []
+        for i in range(30, len(closes)):
+            ema_short = sum(closes[i - 9:i + 1]) / 10
+            ema_long = sum(closes[i - 29:i + 1]) / 30
+            ema_diffs.append((i, ema_short - ema_long))
+
+        # Walk backwards to find the most recent sign change (crossover)
+        for j in range(len(ema_diffs) - 1, 0, -1):
+            idx, diff = ema_diffs[j]
+            _, prev_diff = ema_diffs[j - 1]
+            if (prev_diff < 0 and diff >= 0) or (prev_diff >= 0 and diff < 0):
+                bar = candles[idx]
+                return bar['low'], bar['high']
+
+        return None, None
+
     def _detect_signal(self, candles: List[Dict], rsi: float, autotrend: str, htf_trend: str) -> SignalType:
         """Detect if there's a valid signal"""
         if len(candles) < 5:
@@ -246,44 +333,62 @@ class SignalGenerator:
                 units = 1000  # Default for paper trading
             
             direction = "long" if signal.signal_type == SignalType.BUY else "short"
+
+            # pip_size used for swing-stop buffer and fixed-stop fallback
+            pip_size = self.oanda_client.PIP_SIZES.get(signal.instrument, 0.0001) if self.oanda_client else 0.0001
             
-            # Calculate SL using ATS rules: swing low/high (if available)\n            pip_size = self.oanda_client.PIP_SIZES.get(signal.instrument, 0.0001) if self.oanda_client else 0.0001
-            
+            ats = self.config.ats_strategy.value  # 'standard', 'aggressive', 'scaling', 'dpl'
+
             if signal.signal_type == SignalType.BUY:
-                # LONG: Stop at swing low (ATS Official Rule)
-                if signal.swing_low:
-                    # Use swing low minus small buffer (2 pips)
+                # LONG stop loss:
+                #   Strategy 2 (Aggressive) → low of trend-change bar
+                #   All others (Standard / Scaling / DPL) → swing low
+                if ats == "aggressive" and signal.trend_bar_low:
+                    stop_loss = signal.trend_bar_low - (2 * pip_size)
+                elif signal.swing_low:
                     stop_loss = signal.swing_low - (2 * pip_size)
                 elif signal.atr_value:
-                    # Fallback to ATR if swing not provided
                     stop_distance = signal.atr_value * self.config.risk.ATR_MULTIPLIER
                     stop_loss = signal.entry_price - stop_distance
                 else:
-                    # Final fallback to fixed pips
                     stop_distance = self.config.risk.FIXED_STOP_PIPS * pip_size
                     stop_loss = signal.entry_price - stop_distance
-                
-                # Calculate TP at 2R (will exit 50% here per ATS strategy)
+
                 risk = signal.entry_price - stop_loss
-                take_profit = signal.entry_price + (risk * self.config.risk.RISK_REWARD_RATIO)
-                
+
+                # LONG take profit: strategy-specific OANDA TP order.
+                # Standard and DPL exits are managed by position_manager (no OANDA TP).
+                if ats == "aggressive":
+                    take_profit = signal.entry_price + (risk * 10.0)
+                elif ats == "scaling":
+                    take_profit = signal.entry_price + (risk * 3.0)
+                else:  # standard, dpl — position_manager handles partial closes
+                    take_profit = None
+
             else:  # SELL
-                # SHORT: Stop at swing high (ATS Official Rule)
-                if signal.swing_high:
-                    # Use swing high plus small buffer (2 pips)
+                # SHORT stop loss:
+                #   Strategy 2 (Aggressive) → high of trend-change bar
+                #   All others → swing high
+                if ats == "aggressive" and signal.trend_bar_high:
+                    stop_loss = signal.trend_bar_high + (2 * pip_size)
+                elif signal.swing_high:
                     stop_loss = signal.swing_high + (2 * pip_size)
                 elif signal.atr_value:
-                    # Fallback to ATR if swing not provided
                     stop_distance = signal.atr_value * self.config.risk.ATR_MULTIPLIER
                     stop_loss = signal.entry_price + stop_distance
                 else:
-                    # Final fallback to fixed pips
                     stop_distance = self.config.risk.FIXED_STOP_PIPS * pip_size
                     stop_loss = signal.entry_price + stop_distance
-                
-                # Calculate TP at 2R (will exit 50% here per ATS strategy)
+
                 risk = stop_loss - signal.entry_price
-                take_profit = signal.entry_price - (risk * self.config.risk.RISK_REWARD_RATIO)
+
+                # SHORT take profit: strategy-specific OANDA TP order.
+                if ats == "aggressive":
+                    take_profit = signal.entry_price - (risk * 10.0)
+                elif ats == "scaling":
+                    take_profit = signal.entry_price - (risk * 3.0)
+                else:  # standard, dpl — position_manager handles partial closes
+                    take_profit = None
 
             # Execute on OANDA if not in paper trading mode
             oanda_trade_id = None
@@ -291,7 +396,8 @@ class SignalGenerator:
             
             if not self.config.paper_trading and self.oanda_client:
                 try:
-                    logger.info(f"Placing OANDA order: {signal.instrument} {units if direction == 'long' else -units} units, SL: {stop_loss:.5f}, TP: {take_profit:.5f}")
+                    tp_str = f"{take_profit:.5f}" if take_profit is not None else "none (position_manager)"
+                    logger.info(f"Placing OANDA order: {signal.instrument} {units if direction == 'long' else -units} units, SL: {stop_loss:.5f}, TP: {tp_str}")
                     oanda_result = self.oanda_client.place_market_order(
                         instrument=signal.instrument,
                         units=units if direction == "long" else -units,
@@ -341,6 +447,7 @@ class SignalGenerator:
                 )
 
             # Insert trade into DB only if execution succeeded (or if in paper/no-broker mode)
+            trade_id = None
             if execution_success:
                 trade_id = database.insert_trade(
                     instrument=signal.instrument,

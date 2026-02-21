@@ -618,6 +618,40 @@ async def api_account():
             raise HTTPException(status_code=502, detail=str(e))
 
 
+@app.get("/api/account/history")
+async def api_account_history(count: int = 50):
+    """Fetch recent closed transactions from OANDA to explain account balance."""
+    if config.paper_trading or not oanda_client:
+        # Return DB closed trades for paper mode
+        trades = database.get_trade_history(limit=count)
+        return {"source": "database", "transactions": [
+            {
+                "id": t["id"],
+                "instrument": t["instrument"],
+                "direction": t["direction"],
+                "units": t["units"],
+                "entry_price": t["entry_price"],
+                "exit_price": t["exit_price"],
+                "profit_loss": t["profit_loss"],
+                "profit_pips": t["profit_pips"],
+                "close_reason": t["close_reason"],
+                "close_time": t["close_time"],
+            }
+            for t in trades
+        ]}
+    try:
+        summary = oanda_client.get_account_summary()
+        closed = oanda_client.get_closed_trades(count=count)
+        return {
+            "source": "oanda",
+            "balance": float(summary.get("balance", 0)),
+            "transactions": closed,
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch account history: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @app.get("/api/status")
 async def api_status():
     """System status for the top bar."""
@@ -709,11 +743,15 @@ async def api_close_trade(req: CloseTradeRequest):
     # Close on OANDA only if trade has an OANDA ID and we're not in paper trading mode
     oanda_trade_id = trade.get('oanda_trade_id')
     trade_doesnt_exist = False
+    fill_price = req.exit_price
+    realized_pl = req.profit_loss
     if oanda_client and not config.paper_trading and oanda_trade_id:
         try:
             result = oanda_client.close_trade(trade_id=oanda_trade_id)
-            fill_price = float(result.get("price", req.exit_price))
-            realized_pl = float(result.get("pl", req.profit_loss))
+            # OANDA returns fill data under orderFillTransaction
+            fill_txn = result.get("orderFillTransaction", {})
+            fill_price = float(fill_txn.get("price") or req.exit_price)
+            realized_pl = float(fill_txn.get("pl") or req.profit_loss)
             database.log_activity(
                 "trade",
                 f"LIVE CLOSE Trade #{trade_id} (OANDA #{oanda_trade_id})",
@@ -742,18 +780,34 @@ async def api_close_trade(req: CloseTradeRequest):
     try:
         # Use special close reason if trade was orphaned
         close_reason = "orphaned_trade" if trade_doesnt_exist else req.close_reason
-        
+
+        if trade_doesnt_exist:
+            db_exit_price = trade['entry_price']
+            db_profit_loss = 0.0
+            db_profit_pips = 0.0
+        else:
+            db_exit_price = fill_price
+            db_profit_loss = realized_pl
+            # Calculate pips from actual fill price
+            instrument = trade.get('instrument', '')
+            from brokers.oanda import OandaClient as _OC
+            pip_size = _OC.PIP_SIZES.get(instrument, 0.0001)
+            if trade.get('direction') == 'long':
+                db_profit_pips = (fill_price - trade['entry_price']) / pip_size
+            else:
+                db_profit_pips = (trade['entry_price'] - fill_price) / pip_size
+
         database.close_trade(
             trade_id=trade_id,
-            exit_price=req.exit_price if not trade_doesnt_exist else trade['entry_price'],
-            profit_loss=0.0 if trade_doesnt_exist else req.profit_loss,
-            profit_pips=0.0 if trade_doesnt_exist else req.profit_pips,
+            exit_price=db_exit_price,
+            profit_loss=db_profit_loss,
+            profit_pips=db_profit_pips,
             close_reason=close_reason,
         )
 
         # Return margin to virtual balance in paper trading mode
         if config.paper_trading:
-            closed_trade = next((t for t in database.get_trade_history(limit=10) if t['id'] == trade_id), None)
+            closed_trade = database.get_trade_by_id(trade_id)
             if closed_trade:
                 margin_returned = abs(closed_trade['units']) * closed_trade['entry_price'] * 0.01
                 current_balance = database.get_virtual_balance()
@@ -761,7 +815,7 @@ async def api_close_trade(req: CloseTradeRequest):
                 database.update_virtual_balance(new_balance)
                 logger.info(f"Paper trade closed: returned ${margin_returned:.2f} margin, balance now ${new_balance:.2f}")
             else:
-                logger.warning(f"Closed trade {trade_id} not found in history for margin update.")
+                logger.warning(f"Closed trade {trade_id} not found for margin update.")
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -790,10 +844,22 @@ async def api_close_all_trades():
             # Close on OANDA if trade has OANDA ID and we're not in paper mode
             trade_doesnt_exist_bulk = False
             oanda_close_failed = False
+            bulk_fill_price = trade['entry_price']
+            bulk_realized_pl = 0.0
+            bulk_profit_pips = 0.0
             if oanda_client and not config.paper_trading and oanda_trade_id:
                 try:
                     result = oanda_client.close_trade(trade_id=oanda_trade_id)
-                    logger.info(f"Closed OANDA trade {oanda_trade_id} (DB ID: {trade_id})")
+                    fill_txn = result.get("orderFillTransaction", {})
+                    bulk_fill_price = float(fill_txn.get("price") or trade['entry_price'])
+                    bulk_realized_pl = float(fill_txn.get("pl") or 0.0)
+                    from brokers.oanda import OandaClient as _OC
+                    pip_size = _OC.PIP_SIZES.get(trade.get('instrument', ''), 0.0001)
+                    if trade.get('direction') == 'long':
+                        bulk_profit_pips = (bulk_fill_price - trade['entry_price']) / pip_size
+                    else:
+                        bulk_profit_pips = (trade['entry_price'] - bulk_fill_price) / pip_size
+                    logger.info(f"Closed OANDA trade {oanda_trade_id} (DB ID: {trade_id}) fill={bulk_fill_price} pl={bulk_realized_pl:.2f}")
                 except Exception as e:
                     error_str = str(e)
                     # Check if trade doesn't exist on OANDA (orphaned trade)
@@ -807,15 +873,15 @@ async def api_close_all_trades():
                         errors.append(error_msg)
                         # Skip closing this trade in DB if OANDA close failed (not a 404)
                         continue
-            
+
             # Close in database only if OANDA close succeeded or trade doesn't exist
             if not oanda_close_failed:
                 close_reason = "orphaned_trade" if trade_doesnt_exist_bulk else "manual_close_all"
                 database.close_trade(
                     trade_id=trade_id,
-                    exit_price=trade['entry_price'],  # Use entry price as exit for emergency close
-                    profit_loss=0,
-                    profit_pips=0,
+                    exit_price=bulk_fill_price if not trade_doesnt_exist_bulk else trade['entry_price'],
+                    profit_loss=0.0 if trade_doesnt_exist_bulk else bulk_realized_pl,
+                    profit_pips=0.0 if trade_doesnt_exist_bulk else bulk_profit_pips,
                     close_reason=close_reason
                 )
                 
@@ -1413,6 +1479,32 @@ async def api_get_settings():
 @app.put("/api/settings")
 async def api_update_settings(update: SettingsUpdate):
     """Update trading settings at runtime."""
+    # Validate critical settings before applying
+    errors = []
+    if update.leverage is not None and not (1 <= update.leverage <= 500):
+        errors.append("leverage must be between 1 and 500")
+    if update.risk_per_trade is not None and not (0.1 <= update.risk_per_trade <= 10.0):
+        errors.append("risk_per_trade must be between 0.1% and 10.0%")
+    if update.risk_reward_ratio is not None and not (0.5 <= update.risk_reward_ratio <= 10.0):
+        errors.append("risk_reward_ratio must be between 0.5 and 10.0")
+    if update.max_open_trades is not None and not (1 <= update.max_open_trades <= 50):
+        errors.append("max_open_trades must be between 1 and 50")
+    if update.max_consecutive_losses is not None and not (1 <= update.max_consecutive_losses <= 20):
+        errors.append("max_consecutive_losses must be between 1 and 20")
+    if update.fixed_stop_pips is not None and not (1 <= update.fixed_stop_pips <= 500):
+        errors.append("fixed_stop_pips must be between 1 and 500")
+    if update.atr_multiplier is not None and not (0.5 <= update.atr_multiplier <= 10.0):
+        errors.append("atr_multiplier must be between 0.5 and 10.0")
+    _APPROVED_PAIRS = {"EUR_USD", "USD_JPY", "GBP_USD", "AUD_USD", "NZD_USD", "USD_CHF", "USD_CAD"}
+    if update.allowed_pairs is not None:
+        bad = [p for p in update.allowed_pairs if p not in _APPROVED_PAIRS]
+        if bad:
+            errors.append(f"Unknown pair(s): {', '.join(bad)}. Allowed: {', '.join(sorted(_APPROVED_PAIRS))}")
+        if not update.allowed_pairs:
+            errors.append("allowed_pairs cannot be empty")
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors))
+
     cfg = config  # Use loaded config (from DB)
     changes = {}
 
@@ -1696,13 +1788,19 @@ async def api_backtest_compare_png(filename: str = "backtest_compare_EUR_USD_202
 
 @app.get("/health")
 async def health():
+    db_ok = False
+    try:
+        database.get_open_trades()
+        db_ok = True
+    except Exception:
+        pass
     return {
-        "status": "healthy",
+        "status": "healthy" if db_ok else "degraded",
         "timestamp": datetime.now(ZoneInfo("UTC")).isoformat(),
         "components": {
             "rule_engine": rule_engine is not None,
             "news_filter": news_filter is not None,
-            "database": True,
+            "database": db_ok,
         },
     }
 

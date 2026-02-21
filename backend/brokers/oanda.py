@@ -309,10 +309,16 @@ class OandaClient:
             {"instruments": instrument}
         )
         
-        prices = response.get("prices", [{}])[0]
-        bid = float(prices.get("bids", [{"price": 0}])[0]["price"])
-        ask = float(prices.get("asks", [{"price": 0}])[0]["price"])
-        
+        price_list = response.get("prices", [])
+        if not price_list:
+            raise Exception(f"No price data returned for {instrument}")
+        prices = price_list[0]
+        bids = prices.get("bids", [])
+        asks = prices.get("asks", [])
+        if not bids or not asks:
+            raise Exception(f"Missing bid/ask data for {instrument}: {prices}")
+        bid = float(bids[0]["price"])
+        ask = float(asks[0]["price"])
         return bid, ask
     
     def get_spread_pips(self, instrument: str) -> float:

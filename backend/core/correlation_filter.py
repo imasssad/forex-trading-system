@@ -205,12 +205,15 @@ class CorrelationFilter:
         }
         
         for position in open_positions:
+            if "_" not in position.pair:
+                logger.warning(f"Skipping malformed pair in portfolio analysis: {position.pair}")
+                continue
             base, quote = position.pair.split("_")
             multiplier = 1 if position.direction == TradeDirection.LONG else -1
-            
+
             # Long EUR/USD = +EUR, -USD
-            exposure[base] += multiplier
-            exposure[quote] -= multiplier
+            exposure[base] = exposure.get(base, 0) + multiplier
+            exposure[quote] = exposure.get(quote, 0) - multiplier
         
         return {
             "currency_exposure": exposure,

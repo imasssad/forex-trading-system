@@ -137,6 +137,10 @@ def _do_init():
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.executescript(_SCHEMA)
+    # Persist default virtual balance so it survives restarts
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('virtual_balance', '10000.0')"
+    )
     conn.commit()
     conn.close()
     logger.info(f"Database initialized at {DB_PATH}")
@@ -221,6 +225,15 @@ def get_open_trades() -> List[Dict]:
             "SELECT * FROM trades WHERE status = 'open' ORDER BY open_time DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_trade_by_id(trade_id: int) -> Optional[Dict]:
+    """Get a single trade by database ID (open or closed)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM trades WHERE id = ?", (trade_id,)
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def get_virtual_balance() -> float:
@@ -380,11 +393,16 @@ def load_settings_to_config(config):
     if 'correlation_threshold' in db_settings:
         config.indicators.CORRELATION_THRESHOLD = float(db_settings['correlation_threshold'])
 
-    # Trading pairs
+    # Trading pairs — enforce approved set
+    _APPROVED_PAIRS = {"EUR_USD", "USD_JPY", "GBP_USD", "AUD_USD", "NZD_USD", "USD_CHF", "USD_CAD"}
     if 'allowed_pairs' in db_settings:
         pairs = db_settings['allowed_pairs']
         if isinstance(pairs, list):
-            config.pairs.ALLOWED_PAIRS = pairs
+            filtered = [p for p in pairs if p in _APPROVED_PAIRS]
+            if filtered:
+                config.pairs.ALLOWED_PAIRS = filtered
+            else:
+                logger.warning("allowed_pairs in DB contained no valid pairs, using defaults")
 
     # Timeframes
     if 'entry_timeframe' in db_settings:

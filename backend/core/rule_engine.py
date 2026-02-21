@@ -53,6 +53,10 @@ class TradingSignal:
     swing_low: Optional[float] = None   # For long trades
     swing_high: Optional[float] = None  # For short trades
 
+    # Strategy 2 (Aggressive): SL at the bar that caused the ATS trend change
+    trend_bar_low: Optional[float] = None   # Low of trend-change bar (long SL reference)
+    trend_bar_high: Optional[float] = None  # High of trend-change bar (short SL reference)
+
     # New fields for cost modeling
     spread: Optional[float] = None
     fee: Optional[float] = None
