@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { isAuthenticated } from '../lib/auth';
 import Sidebar from '../components/Sidebar';
 import StatusBar from '../components/StatusBar';
 import AccountPanel from '../components/panels/AccountPanel';
@@ -24,8 +26,18 @@ export type ActiveView =
   | 'logs';
 
 export default function Dashboard() {
+  const router = useRouter();
   const [activeView, setActiveView] = useState<ActiveView>('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Auth guard — redirect to login if no valid token
+  useEffect(() => {
+    if (!isAuthenticated()) {
+      router.push('/login');
+    }
+  }, [router]);
+
+  if (!isAuthenticated()) return null; // Prevent flash of dashboard before redirect
 
   return (
     <div className="flex h-screen overflow-hidden">
